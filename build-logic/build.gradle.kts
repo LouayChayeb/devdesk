@@ -3,3 +3,8 @@
 plugins {
     `kotlin-dsl`
 }
+
+dependencies {
+    // Lets the convention plugin apply id("com.diffplug.spotless") (the formatter).
+    implementation(libs.spotless.gradle.plugin)
+}

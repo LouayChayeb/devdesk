@@ -2,6 +2,8 @@
 // plugins { id("devdesk.java-conventions") } instead of copy-pasting this block.
 plugins {
     java
+    checkstyle // style checker, built into Gradle
+    id("com.diffplug.spotless") // formatter
 }
 
 java {
@@ -12,15 +14,30 @@ java {
     }
 }
 
+// Precompiled plugins can't use the generated `libs.` accessors,
+// so the catalog is looked up by name instead.
+val libs = the<VersionCatalogsExtension>().named("libs")
+
+spotless {
+    java {
+        // `spotlessCheck` (part of `build`) fails on badly formatted code;
+        // `./gradlew spotlessApply` rewrites the files so they pass.
+        palantirJavaFormat(libs.findVersion("palantir").get().requiredVersion)
+    }
+}
+
+checkstyle {
+    toolVersion = libs.findVersion("checkstyle").get().requiredVersion
+    // One rules file for the whole repo, in <repo>/config/checkstyle/.
+    configFile = rootProject.file("config/checkstyle/checkstyle.xml")
+    maxWarnings = 0
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     // Every javac warning becomes a build failure, so warnings can't pile up unnoticed.
     options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
 }
-
-// Precompiled plugins can't use the generated `libs.` accessors,
-// so the catalog is looked up by name instead.
-val libs = the<VersionCatalogsExtension>().named("libs")
 
 dependencies {
     // platform(...) imports the BOM: it pins the versions of the JUnit artifacts below.

@@ -1,0 +1,27 @@
+# GitHub's robot recipe: on every push (and every pull request), build and test
+# DevDesk on a fresh Ubuntu machine and show ✅ or ❌ next to the commit.
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Download the code from the repo onto the robot's machine.
+      - uses: actions/checkout@v7
+
+      # 2. Install Java 25 (Temurin, the same JDK you use through SDKMAN).
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      # 3. Prepare Gradle: checks gradle-wrapper.jar is the genuine one,
+      #    and caches downloads so the next run is faster.
+      - uses: gradle/actions/setup-gradle@v6
+
+      # 4. The same command you run locally: compile, test, format check, style check.
+      - run: ./gradlew build

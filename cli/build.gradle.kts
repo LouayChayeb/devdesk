@@ -11,6 +11,6 @@ dependencies {
 }
 
 application {
-    mainClass = "io.github.louaychayeb.devdesk.cli.Main"
+    mainClass = "io.github.louch.devdesk.cli.Main"
     applicationName = "devdesk" // name of the generated start script
 }
