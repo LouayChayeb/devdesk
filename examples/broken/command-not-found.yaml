@@ -1,0 +1,5 @@
+version: 1
+name: broken-command
+services:
+  api:
+    command: pyhton3 -m http.server 3004

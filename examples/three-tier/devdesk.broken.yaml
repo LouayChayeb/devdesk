@@ -1,0 +1,22 @@
+# Same project with a typo in the database command, to see how DevDesk explains a broken dependency.
+# Try:   devdesk trust -f devdesk.broken.yaml   then   devdesk up -f devdesk.broken.yaml
+version: 1
+name: three-tier-broken
+
+services:
+  db:
+    command: pyhton3 db.py
+    health: { type: tcp, port: 5433 }
+
+  api:
+    command: python3 api.py
+    depends_on:
+      db: { condition: healthy }
+    environment:
+      DB_PORT: "5433"
+    health: { type: http, url: http://127.0.0.1:3001/health }
+
+  web:
+    command: python3 -m http.server 4200 --bind 127.0.0.1 --directory web
+    depends_on:
+      api: { condition: healthy }

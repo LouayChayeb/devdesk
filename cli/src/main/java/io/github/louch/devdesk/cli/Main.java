@@ -1,18 +1,74 @@
 package io.github.louch.devdesk.cli;
 
-/** Entry point of the {@code devdesk} command-line tool. */
+import io.github.louch.devdesk.core.diagnosis.DiagnosisEngine;
+import io.github.louch.devdesk.docker.DockerConnection;
+import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
+import io.github.louch.devdesk.linux.health.LocalHealthProbe;
+import io.github.louch.devdesk.linux.network.ProcNetListeners;
+import io.github.louch.devdesk.linux.process.LinuxProcessRuntime;
+import io.github.louch.devdesk.linux.process.ScopeLeftovers;
+import io.github.louch.devdesk.linux.resources.ProcResources;
+import io.github.louch.devdesk.linux.trust.TrustStore;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.security.SecureRandom;
+import java.time.Clock;
+import picocli.CommandLine;
+import picocli.CommandLine.Command;
+
+/** Entry point of the {@code devdesk} command-line tool. Wires every dependency by hand. */
+@Command(name = "devdesk", mixinStandardHelpOptions = true, description = "Run local multi-service environments.")
 public final class Main {
 
-    private Main() {
-        // Only static methods here, so nobody should create a Main object.
-    }
-
     public static void main(String[] args) {
-        System.out.println(greeting());
+        System.exit(commandLine().execute(args));
     }
 
-    // Separate from main() so a test can check the text without capturing System.out.
-    static String greeting() {
-        return "devdesk cli: hello (nothing to do yet)";
+    static CommandLine commandLine() {
+        // In M1 the engine runs inside the CLI. From M3 the CLI will talk to the daemon instead.
+        var clock = Clock.systemUTC();
+        var random = new SecureRandom();
+        var env = System.getenv();
+        var runtime = LinuxProcessRuntime.detect(clock, random);
+        // Health-check commands are short-lived: a plain process group is enough, and avoids a systemd unit per probe.
+        var probe = new LocalHealthProbe(new LinuxProcessRuntime(false, clock, random));
+        var trust = new TrustStore(TrustStore.defaultFile(env));
+        var system = new LinuxIntrospection(new ProcNetListeners());
+        var diagnosis = DiagnosisEngine.standard();
+        var engine = new UpCommand.Engine(
+                runtime,
+                () -> DockerConnection.connect(env),
+                probe,
+                system,
+                diagnosis,
+                new ScopeLeftovers(),
+                new ProcResources(),
+                trust,
+                clock,
+                random);
+        var stdin = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+
+        return new CommandLine(new Main())
+                .addSubcommand(
+                        "run", new RunCommand(runtime, Path.of("").toAbsolutePath(), env, System.out, System.err))
+                .addSubcommand("up", new UpCommand(engine, env, System.out, System.err))
+                .addSubcommand("trust", new TrustCommand(env, trust, stdin, System.out, System.err))
+                .addSubcommand("history", new HistoryCommand(env, clock, System.out, System.err))
+                .addSubcommand(
+                        "ps",
+                        new PsCommand(
+                                env,
+                                system,
+                                new ScopeLeftovers(),
+                                () -> DockerConnection.connect(env),
+                                clock,
+                                System.out,
+                                System.err))
+                .addSubcommand(
+                        "why",
+                        new WhyCommand(
+                                env, system, diagnosis, () -> DockerConnection.connect(env), System.out, System.err));
     }
 }

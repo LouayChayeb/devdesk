@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 class MainTest {
 
     @Test
-    void greetingNamesTheProgram() {
-        assertThat(Main.greeting()).startsWith("devdesk cli");
+    void helpListsTheRunCommand() {
+        assertThat(Main.commandLine().getUsageMessage()).contains("run");
     }
 }

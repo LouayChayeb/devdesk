@@ -1,0 +1,29 @@
+package io.github.louch.devdesk.core.container;
+
+import io.github.louch.devdesk.core.health.ProbeResult;
+import io.github.louch.devdesk.core.process.ExitStatus;
+import io.github.louch.devdesk.core.process.LaunchException;
+import io.github.louch.devdesk.core.process.OutputLine;
+import io.github.louch.devdesk.core.process.StopResult;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
+
+/** The port core uses to run containers. Docker implements it in engine-docker; tests use a fake. */
+public interface ContainerRuntime {
+
+    /**
+     * Pulls the image if needed (progress goes to {@code output}), creates and starts the container, and streams its
+     * logs to {@code output}. Fails with a plain-words reason (image not found, port taken, Docker not running...).
+     */
+    RunningContainer start(ContainerLaunchSpec spec, Consumer<OutputLine> output) throws LaunchException;
+
+    /** Completes when the container's main process has exited. */
+    CompletableFuture<ExitStatus> onExit(RunningContainer container);
+
+    /** Stops it (SIGTERM, then SIGKILL after {@code grace}), removes it (named volumes are kept), and checks it's gone. */
+    StopResult stop(RunningContainer container, Duration grace) throws InterruptedException;
+
+    /** The image's own HEALTHCHECK verdict, for {@code health: { type: docker }}. */
+    ProbeResult health(RunningContainer container);
+}

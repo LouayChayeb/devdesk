@@ -1,0 +1,28 @@
+# A tiny three-service project to try DevDesk with (only needs python3).
+#   db  (fake database, takes ~2 s to boot)  ←  api (needs db healthy)  ←  web (needs api healthy)
+# Try:   devdesk trust   then   devdesk up   then Ctrl+C
+version: 1
+name: three-tier
+
+services:
+  db:
+    command: python3 db.py
+    ports: [5433]
+    health: { type: tcp, port: 5433, start_period: 10s }
+
+  api:
+    command: python3 api.py
+    depends_on:
+      db: { condition: healthy }
+    ports: [3001]
+    environment:
+      DB_PORT: "5433"
+    health: { type: http, url: http://127.0.0.1:3001/health }
+    restart: on-failure
+
+  web:
+    command: python3 -m http.server 4200 --bind 127.0.0.1 --directory web
+    depends_on:
+      api: { condition: healthy }
+    ports: [4200]
+    health: { type: http, url: http://127.0.0.1:4200/ }

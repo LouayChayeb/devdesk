@@ -8,9 +8,20 @@ plugins {
 dependencies {
     implementation(project(":engine-core"))
     implementation(project(":engine-linux"))
+    implementation(project(":engine-docker"))
+    implementation(libs.picocli)
+    // docker-java logs through SLF4J; without a backend it prints a warning on every start. DevDesk's own
+    // messages don't use SLF4J yet, so a "no-op" backend that drops the library's internal logging is enough.
+    runtimeOnly(libs.slf4j.nop)
 }
 
 application {
     mainClass = "io.github.louch.devdesk.cli.Main"
     applicationName = "devdesk" // name of the generated start script
+    // engine-linux calls libc's kill() through FFM; without this Java prints a warning on every run.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.test {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }

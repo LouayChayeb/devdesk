@@ -1,0 +1,6 @@
+version: 1
+name: broken-wrong-port
+services:
+  api:
+    command: python3 -m http.server 3005 --bind 127.0.0.1
+    health: { type: http, url: http://127.0.0.1:3006/, retries: 2, start_period: 2s, interval: 500ms }

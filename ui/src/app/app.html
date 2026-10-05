@@ -1,0 +1,133 @@
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">◧</span> DevDesk</div>
+    <div class="section-label">Projects</div>
+    @for (r of projects(); track r) {
+      <button class="project" [class.active]="engine.project()?.root === r" (click)="open(r)" [title]="r">
+        @if (engine.project()?.root === r) {
+          <dd-dot [label]="summaryLabel()" />
+        } @else {
+          <dd-dot label="stopped" />
+        }
+        <span class="project-name">{{ base(r) }}</span>
+      </button>
+    }
+    <div class="spacer"></div>
+    <div class="open">
+      <button class="ghost wide" (click)="pickFolder()">+ Add project folder</button>
+      <input
+        class="mono"
+        placeholder="or type a path…"
+        [value]="pathInput()"
+        (input)="pathInput.set($any($event.target).value)"
+        (keydown.enter)="open(pathInput())"
+      />
+    </div>
+  </aside>
+
+  <main class="main">
+    @if (engine.project(); as p) {
+      <header class="header">
+        <div class="title">
+          <div class="name">{{ p.name }}</div>
+          <div class="path mono">{{ short(p.root) }}</div>
+        </div>
+        <div class="summary">
+          <dd-dot [label]="summaryLabel()" />
+          <span>{{ healthyCount() }}/{{ services().length }} up</span>
+        </div>
+        <div class="actions">
+          <button class="ghost" (click)="check()" title="Check for problems without starting anything">Check</button>
+          @if (engine.running()) {
+            <button (click)="stop()" title="Ctrl+Enter">■ Stop</button>
+          } @else {
+            <button class="primary" [disabled]="busy()" (click)="start()" title="Ctrl+Enter">▶ Start</button>
+          }
+        </div>
+      </header>
+      @if (!p.trusted && !engine.running()) {
+        <div class="banner warn">
+          This project isn't trusted yet (or devdesk.yaml changed). Nothing runs until you review its commands.
+          <button class="ghost" (click)="trustOpen.set(true)">Review commands</button>
+        </div>
+      }
+      @if (actionError(); as err) {
+        <div class="banner err">{{ err }}</div>
+      }
+      <nav class="tabs">
+        <button class="tab" [class.on]="tab() === 'services'" (click)="tab.set('services')">Services</button>
+        <button class="tab" [class.on]="tab() === 'diagnosis'" (click)="tab.set('diagnosis')">
+          Diagnosis
+          @if (findingCount() > 0) {
+            <span class="badge">{{ findingCount() }}</span>
+          }
+        </button>
+        <button class="tab" [class.on]="tab() === 'timeline'" (click)="tab.set('timeline')">Timeline</button>
+        <button class="tab" [class.on]="tab() === 'connections'" (click)="tab.set('connections')">Connections</button>
+      </nav>
+      <section class="content">
+        @if (tab() === 'services') {
+          <dd-services [selected]="selected()" (select)="selected.set($event)" (why)="why($event)" />
+        } @else if (tab() === 'diagnosis') {
+          <dd-diagnosis [only]="diagnosisFor()" (showAll)="diagnosisFor.set(null)" />
+        } @else if (tab() === 'timeline') {
+          <dd-timeline />
+        } @else {
+          <dd-connections />
+        }
+      </section>
+      <dd-logs class="logs" [service]="selected()" (serviceChange)="selected.set($event)" />
+    } @else {
+      <div class="empty">
+        @if (engine.status() === 'disconnected' && engine.error()) {
+          <h2>The DevDesk engine isn't running</h2>
+          <p class="mono">{{ engine.error() }}</p>
+          <button class="primary" (click)="engine.start()">Try again</button>
+        } @else {
+          <h2>Open a project</h2>
+          <p>Choose a folder that contains a <span class="mono">devdesk.yaml</span>. DevDesk shows every command before it runs anything.</p>
+          <button class="primary" (click)="pickFolder()">Add project folder</button>
+        }
+        @if (openError(); as e) {
+          <div class="open-error">
+            <div>{{ e.error }}</div>
+            @for (pr of e.problems ?? []; track $index) {
+              <div class="mono problem">{{ pr.line }}:{{ pr.column }} {{ pr.path }} {{ pr.message }}</div>
+            }
+          </div>
+        }
+      </div>
+    }
+  </main>
+
+  <footer class="statusbar mono">
+    <span class="item"><dd-dot [label]="engine.status() === 'connected' ? 'healthy' : engine.status() === 'connecting' ? 'starting' : 'crashed'" /> engine {{ engine.status() }}</span>
+    @if (engine.project()) {
+      <span class="item">CPU {{ cpu(totals().cpu) }}</span>
+      <span class="item">RAM {{ bytes(totals().memory) }}</span>
+      <span class="item">{{ ports() }} declared ports</span>
+      <span class="item grow">{{ short(engine.project()!.file) }}</span>
+    }
+    @if (engine.warnings().length > 0) {
+      <span class="item warn-text" [title]="engine.warnings().join('\n')">! {{ engine.warnings()[engine.warnings().length - 1] }}</span>
+    }
+  </footer>
+</div>
+
+@if (trustOpen() && engine.project(); as p) {
+  <div class="scrim" (click)="trustOpen.set(false)">
+    <div class="modal" role="dialog" aria-label="Trust this project?" (click)="$event.stopPropagation()">
+      <h3>Trust this project?</h3>
+      <p>
+        <span class="mono">{{ short(p.file) }}</span> will run exactly these commands and images. Only continue if you
+        expect them.
+      </p>
+      <pre class="commands">@for (c of p.commands; track $index) {{{ c }}
+}</pre>
+      <div class="modal-actions">
+        <button class="ghost" (click)="trustOpen.set(false)">Cancel</button>
+        <button class="primary" (click)="trustAndRun()">Trust and run</button>
+      </div>
+    </div>
+  </div>
+}

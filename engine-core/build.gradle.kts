@@ -4,3 +4,8 @@ plugins {
     id("devdesk.java-conventions")
     `java-library`
 }
+
+dependencies {
+    // Reading devdesk.yaml. A plain parsing library: no OS access, so it's allowed in core.
+    implementation(libs.jackson.yaml)
+}

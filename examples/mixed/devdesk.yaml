@@ -1,0 +1,28 @@
+# Postgres in Docker + a native API that waits for it. Needs Docker and python3.
+# Try:   devdesk trust   then   devdesk up   then Ctrl+C (the container is stopped and removed; the data volume stays)
+version: 1
+name: mixed
+
+services:
+  db:
+    container:
+      image: postgres:18.1
+      ports: ["55432:5432"]            # only on 127.0.0.1 unless you write 0.0.0.0:55432:5432
+      environment: { POSTGRES_PASSWORD: dev }
+      volumes: ["devdesk-mixed-pgdata:/var/lib/postgresql"]
+    # Not type: tcp. Docker's port forwarder accepts connections even before Postgres is ready, so a TCP check
+    # would pass too early. pg_isready asks Postgres itself, from inside the container.
+    # -h 127.0.0.1 matters: during first-time setup Postgres runs a temporary server on its Unix socket only,
+    # so a socket check could say "ready" before the real server is up.
+    health:
+      type: command
+      command: docker exec devdesk-mixed-db pg_isready -h 127.0.0.1 -U postgres
+      start_period: 30s
+
+  api:
+    command: python3 api.py
+    depends_on:
+      db: { condition: healthy }
+    ports: [3002]
+    environment: { DB_PORT: "55432", API_PORT: "3002" }
+    health: { type: http, url: http://127.0.0.1:3002/health }

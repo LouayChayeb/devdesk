@@ -1,0 +1,120 @@
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+
+/* Design tokens from docs/DESIGN.md §2. Components use only these, never raw colours. */
+:root {
+  --bg-0: #0e1014;
+  --bg-1: #15181e;
+  --bg-2: #1c2028;
+  --bg-3: #242935;
+  --border: #262b35;
+  --border-strong: #343a47;
+  --text-1: #e6e8eb;
+  --text-2: #9aa3af;
+  --text-3: #6b7280;
+  --accent: #5b8cff;
+  --accent-weak: rgba(91, 140, 255, 0.14);
+  --ok: #3fb950;
+  --warn: #d29922;
+  --err: #f85149;
+  --info: #58a6ff;
+  --idle: #6b7280;
+  --ok-bg: rgba(63, 185, 80, 0.14);
+  --warn-bg: rgba(210, 153, 34, 0.14);
+  --err-bg: rgba(248, 81, 73, 0.14);
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --font-ui: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius: 6px;
+  --radius-badge: 4px;
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --ease: 140ms ease-out;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font: 400 var(--fs-md) / 1.45 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font: 500 var(--fs-md) var(--font-ui);
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease);
+}
+button:hover:not(:disabled) {
+  background: var(--bg-3);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+button:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b1220;
+}
+button.primary:hover:not(:disabled) {
+  background: #7aa2ff;
+}
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+button.ghost:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+input,
+select {
+  font: 400 var(--fs-md) var(--font-ui);
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+input::placeholder {
+  color: var(--text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

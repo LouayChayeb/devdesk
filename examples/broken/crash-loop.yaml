@@ -1,0 +1,6 @@
+version: 1
+name: broken-loop
+services:
+  worker:
+    command: 'python3 -c "import sys; sys.exit(''Error: queue URL is missing'')"'
+    restart: on-failure
