@@ -22,16 +22,59 @@ struct Engine {
     connection: Option<Connection>,
 }
 
-/// `DEVDESK_ENGINE` overrides the path; by default the engine built by `./gradlew :daemon:installDist`.
-fn engine_path() -> String {
-    std::env::var("DEVDESK_ENGINE").unwrap_or_else(|_| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../daemon/build/install/devdeskd/bin/devdeskd").to_string()
-    })
+/// `DEVDESK_ENGINE` overrides the path. An installed app (.deb, AppImage) uses the engine bundled with it, which
+/// brings its own Java; during development it's the one built by `./gradlew :daemon:installDist`.
+fn engine_path(app: &tauri::AppHandle) -> String {
+    if let Ok(path) = std::env::var("DEVDESK_ENGINE") {
+        return path;
+    }
+    if let Ok(dir) = app.path().resource_dir() {
+        let bundled = dir.join("engine").join("devdeskd");
+        if bundled.is_file() {
+            return bundled.to_string_lossy().into_owned();
+        }
+    }
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../daemon/build/install/devdeskd/bin/devdeskd").to_string()
 }
 
-fn start_engine() -> Result<(Child, Connection), String> {
-    let path = engine_path();
+/// Variables that only exist because the app was started through `npm run app` → tauri → cargo. Services must get
+/// the user's normal shell environment, as with `devdesk up` in a terminal: `npm_config_*` alone can change how an
+/// `npm run ...` service behaves.
+fn is_tooling_variable(key: &str) -> bool {
+    const PREFIXES: [&str; 5] = ["npm_", "CARGO", "TAURI_", "RUSTUP_", "RUST_"];
+    const EXACT: [&str; 6] = ["INIT_CWD", "OUT_DIR", "NODE", "COLOR", "NODE_ENV", "WEBKIT_DISABLE_DMABUF_RENDERER"];
+    PREFIXES.iter().any(|p| key.starts_with(p)) || EXACT.contains(&key)
+}
+
+/// PATH and LD_LIBRARY_PATH entries added by npm (node_modules/.bin) and cargo (target/, the toolchain).
+fn is_tooling_path(entry: &str) -> bool {
+    entry.contains("/node_modules/.bin")
+        || entry.contains("node-gyp-bin")
+        || entry.contains("/.rustup/toolchains/")
+        || entry.contains("/src-tauri/target/")
+}
+
+fn clean_environment() -> Vec<(String, String)> {
+    std::env::vars()
+        .filter(|(k, _)| !is_tooling_variable(k))
+        .filter_map(|(k, v)| {
+            if k == "PATH" || k == "LD_LIBRARY_PATH" {
+                let kept: Vec<&str> = v.split(':').filter(|e| !e.is_empty() && !is_tooling_path(e)).collect();
+                if kept.is_empty() {
+                    return None;
+                }
+                return Some((k, kept.join(":")));
+            }
+            Some((k, v))
+        })
+        .collect()
+}
+
+fn start_engine(app: &tauri::AppHandle) -> Result<(Child, Connection), String> {
+    let path = engine_path(app);
     let mut child = Command::new(&path)
+        .env_clear()
+        .envs(clean_environment())
         .stdin(Stdio::piped()) // the lifeline: kept open for as long as this app lives
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -51,7 +94,7 @@ fn start_engine() -> Result<(Child, Connection), String> {
 
 /// Starts the engine on first use (or again if it died) and returns where to reach it.
 #[tauri::command]
-fn engine_connection(state: State<Mutex<Engine>>) -> Result<Connection, String> {
+fn engine_connection(app: tauri::AppHandle, state: State<Mutex<Engine>>) -> Result<Connection, String> {
     let mut engine = state.lock().map_err(|_| "engine state poisoned")?;
     if let Some(child) = engine.child.as_mut() {
         if let Ok(Some(_)) = child.try_wait() {
@@ -60,7 +103,7 @@ fn engine_connection(state: State<Mutex<Engine>>) -> Result<Connection, String> 
         }
     }
     if engine.connection.is_none() {
-        let (child, connection) = start_engine()?;
+        let (child, connection) = start_engine(&app)?;
         engine.child = Some(child);
         engine.connection = Some(connection);
     }
@@ -71,6 +114,8 @@ fn engine_connection(state: State<Mutex<Engine>>) -> Result<Connection, String> 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Desktop pop-ups when a service crashes while DevDesk's window isn't in front.
+        .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(Engine::default()))
         .invoke_handler(tauri::generate_handler![engine_connection])
         .build(tauri::generate_context!())
@@ -93,4 +138,27 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_tooling_variables_are_dropped_and_user_ones_kept() {
+        for k in ["npm_config_cache", "CARGO_PKG_NAME", "TAURI_CLI_VERBOSITY", "RUSTUP_TOOLCHAIN", "INIT_CWD", "OUT_DIR"] {
+            assert!(is_tooling_variable(k), "{k} should be dropped");
+        }
+        for k in ["HOME", "JAVA_HOME", "NVM_DIR", "EDITOR", "DATABASE_URL", "XDG_RUNTIME_DIR"] {
+            assert!(!is_tooling_variable(k), "{k} should be kept");
+        }
+    }
+
+    #[test]
+    fn npm_and_cargo_path_entries_are_dropped() {
+        assert!(is_tooling_path("/home/me/code/devdesk/ui/node_modules/.bin"));
+        assert!(is_tooling_path("/home/me/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib"));
+        assert!(!is_tooling_path("/home/me/.nvm/versions/node/v24.21.0/bin"));
+        assert!(!is_tooling_path("/usr/bin"));
+    }
 }

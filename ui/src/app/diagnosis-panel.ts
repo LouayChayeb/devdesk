@@ -1,5 +1,6 @@
-import { Component, computed, inject, input, output, signal } from '@angular/core';
-import { Engine, Finding } from './engine';
+import { Component, OnDestroy, OnInit, computed, inject, input, output, signal } from '@angular/core';
+import { Engine, Finding, MigrationSource } from './engine';
+import { saveAnyPath } from './files';
 
 /** DESIGN.md §4.7: finding cards, root cause first; fixes are copy-only, never run from here. */
 @Component({
@@ -8,14 +9,70 @@ import { Engine, Finding } from './engine';
     @if (only(); as svc) {
       <div class="filter">Why <b>{{ svc }}</b> is broken <button class="ghost" (click)="showAll.emit()">Show all</button></div>
     }
-    @if (cards().length === 0) {
+    @if (!only() && (fine().length || (engine.passed() ?? []).length)) {
+      <section class="passed">
+        <div class="block-label">Checked and fine</div>
+        @for (p of engine.passed() ?? []; track $index) {
+          <div class="ok"><span class="tick">✓</span> {{ p }}</div>
+        }
+        @for (p of fine(); track $index) {
+          <div class="ok"><span class="tick">✓</span> {{ p }}</div>
+        }
+      </section>
+    }
+    @if (cards().length === 0 && migrationCards().length === 0) {
       <div class="none">
         @if (engine.preflight() !== null) {
-          No problems found: ports are free, programs are installed, settings from .env.example are set.
+          No problems found: this machine can run the project.
         } @else {
           No findings. When something fails, DevDesk explains it here. Use <b>Check</b> to look for problems before starting.
         }
       </div>
+    }
+    @if (!only()) {
+      <section class="changes">
+        <div class="chead">
+          <span class="ctitle">What changed since it last worked?</span>
+          <span class="grow"></span>
+          <button class="ghost" [disabled]="bundling()" (click)="bundle()" title="One zip with states, findings, logs, the last day's timeline and settings, secrets taken out: to attach to an issue or a chat">{{ bundling() ? 'Packing…' : 'Crash bundle…' }}</button>
+          <button class="ghost" [disabled]="comparing()" (click)="compare()">{{ comparing() ? 'Comparing…' : changes() ? 'Compare again' : 'Compare with the last clean start' }}</button>
+        </div>
+        @if (bundled(); as b) { <div class="ok small"><span class="tick">✓</span> {{ b }}</div> }
+        @if (changes(); as c) {
+          @if (!c.known) {
+            <div class="dim small">{{ c.message }}</div>
+          } @else if (!c.changes?.length) {
+            <div class="ok small"><span class="tick">✓</span> Nothing in the setup changed since {{ when(c.since!) }}: look at the code, or the services' logs.</div>
+          } @else {
+            <div class="dim small">Since the last clean start, {{ when(c.since!) }}:</div>
+            @for (x of c.changes; track $index) {
+              <div class="change"><span class="area mono">{{ x.area }}</span><span class="mono what">{{ x.what }}</span><span class="detail">{{ x.detail }}</span></div>
+            }
+          }
+        }
+      </section>
+      @for (m of migrationCards(); track m.folder) {
+        <article class="card warning">
+          <header>
+            <span class="sev">!</span>
+            <span class="title">{{ m.title }}</span>
+            <span class="svc mono">{{ m.database ?? m.folder }}</span>
+          </header>
+          <p>{{ m.explanation }}</p>
+          <div class="block-label">Evidence <span class="mono">· {{ m.folder }}</span></div>
+          <pre class="evidence">@for (e of m.evidence ?? []; track $index) {{{ e }}
+}</pre>
+          @if (m.actions?.length) {
+            <div class="block-label">Suggested actions</div>
+            @for (a of m.actions; track $index) {
+              <div class="action">
+                <code>{{ a }}</code>
+                <button class="ghost copy" (click)="copy(a)">{{ copied() === a ? 'Copied' : 'Copy' }}</button>
+              </div>
+            }
+          }
+        </article>
+      }
     }
     @for (f of cards(); track $index) {
       <article class="card {{ f.severity }}">
@@ -59,10 +116,68 @@ import { Engine, Finding } from './engine';
     .action { display: flex; align-items: center; gap: 8px; background: var(--bg-0); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 4px 4px 12px; margin-bottom: 4px; }
     code { font: 400 var(--fs-sm) var(--font-mono); flex: 1; white-space: pre-wrap; word-break: break-word; }
     .copy { font-size: var(--fs-sm); padding: 2px 8px; }
+    .passed { background: var(--bg-1); border: 1px solid var(--border); border-left: 3px solid var(--ok); border-radius: var(--radius); padding: 10px 16px; margin-bottom: 12px; }
+    .ok { color: var(--text-2); font-size: var(--fs-sm); padding: 2px 0; }
+    .tick { color: var(--ok); font-weight: 600; margin-right: 4px; }
+    .changes { background: var(--bg-1); border: 1px solid var(--border); border-left: 3px solid var(--info); border-radius: var(--radius); padding: 10px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
+    .chead { display: flex; align-items: center; gap: 8px; }
+    .ctitle { font: 600 var(--fs-md) var(--font-ui); }
+    .grow { flex: 1; }
+    .change { display: flex; gap: 10px; font-size: var(--fs-sm); align-items: baseline; }
+    .area { flex: none; width: 90px; color: var(--text-3); }
+    .what { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail { color: var(--text-2); }
   `,
 })
-export class DiagnosisPanel {
+export class DiagnosisPanel implements OnInit, OnDestroy {
   readonly engine = inject(Engine);
+  /** Migration folders of the project compared with their databases (checked every 10 s while this page shows). */
+  readonly migrations = signal<MigrationSource[]>([]);
+  readonly migrationCards = computed(() => this.migrations().filter((m) => m.title));
+  readonly fine = computed(() => this.migrations().flatMap((m) => (m.fine ? [m.fine] : [])));
+  private timer?: ReturnType<typeof setInterval>;
+  readonly changes = signal<{ known: boolean; message?: string; since?: string; changes?: { area: string; what: string; detail: string }[] } | null>(null);
+  readonly comparing = signal(false);
+  readonly bundling = signal(false);
+  readonly bundled = signal<string | null>(null);
+
+  async bundle(): Promise<void> {
+    const name = `${this.engine.project()?.name ?? 'project'}-crash-bundle.zip`;
+    const inApp = '__TAURI_INTERNALS__' in window;
+    const path = inApp ? await saveAnyPath(name) : null;
+    if (inApp && path === null) return; // cancelled
+    this.bundling.set(true);
+    const r = await this.engine.crashBundle(path);
+    this.bundling.set(false);
+    this.bundled.set(r.ok ? `Saved ${r.value.path} (${Math.ceil(r.value.bytes / 1024)} KB). Secrets are replaced by ***; read it once before sharing.` : r.error);
+  }
+
+  /** Asks the engine on click: it checks tool versions and images, which takes a few seconds. */
+  async compare(): Promise<void> {
+    this.comparing.set(true);
+    const r = await this.engine.changes();
+    this.comparing.set(false);
+    this.changes.set(r.ok ? r.value : { known: false, message: r.error });
+  }
+
+  when(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  }
+
+  ngOnInit(): void {
+    this.loadMigrations();
+    this.timer = setInterval(() => this.loadMigrations(), 10000);
+  }
+
+  ngOnDestroy(): void {
+    clearInterval(this.timer);
+  }
+
+  private async loadMigrations(): Promise<void> {
+    const r = await this.engine.migrations();
+    this.migrations.set(r.ok ? r.value : []);
+  }
   readonly only = input<string | null>(null);
   readonly showAll = output<void>();
   readonly copied = signal<string | null>(null);

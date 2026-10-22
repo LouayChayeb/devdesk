@@ -1,0 +1,308 @@
+@let st = s();
+<div class="builder">
+  <div class="line">
+    <select class="method mono m-{{ st.method() }}" [value]="st.method()" (change)="st.method.set($any($event.target).value)">
+      @for (m of methods; track m) { <option [value]="m" [selected]="m === st.method()">{{ m }}</option> }
+    </select>
+    <input class="url mono" [value]="st.url()" (input)="st.url.set($any($event.target).value)" (keydown.enter)="send()" [placeholder]="hints.url" spellcheck="false" />
+    @if (isSocket()) {
+      <button class="primary send" [class.danger]="st.socketState() === 'open' || st.socketState() === 'connecting'" (click)="toggleSocket()" title="Open or close the WebSocket connection">
+        <dd-icon [name]="st.socketState() === 'open' || st.socketState() === 'connecting' ? 'stop' : 'play'" [size]="12" /> {{ st.socketState() === 'open' || st.socketState() === 'connecting' ? 'Disconnect' : 'Connect' }}
+      </button>
+    } @else {
+      <button class="primary send" [class.busy]="st.sending()" (click)="send()" title="Ctrl+Enter"><dd-icon name="send" [size]="13" /> Send</button>
+    }
+    <button class="ghost icon" (click)="copyCurl()" title="Copy as curl (variables filled in)"><dd-icon name="terminal" [size]="14" /></button>
+  </div>
+  @if (services().length) {
+    <div class="services">
+      <span class="dim">Service:</span>
+      @for (v of services(); track v.name) {
+        <button class="chip mono" (click)="useService(v.variable)" [title]="v.variable + ' = ' + v.value">{{ v.name }}<span class="dim">:{{ v.value.split(':').pop() }}</span></button>
+      }
+      <span class="grow"></span>
+      <button class="ghost sm" (click)="variables.emit()" [title]="hints.vars">{{ hints.braces }} Variables</button>
+    </div>
+  }
+  <div class="save-line">
+    <input class="name" placeholder="Name (to save it)" [value]="st.name()" (input)="st.name.set($any($event.target).value)" />
+    <input class="coll" placeholder="Collection" list="collections" [value]="st.collection()" (input)="st.collection.set($any($event.target).value)" />
+    <datalist id="collections">@for (c of collections(); track c) { <option [value]="c"></option> }</datalist>
+    <button class="sm" [class.busy]="st.saving()" (click)="save()" title="Ctrl+S"><dd-icon name="save" [size]="12" /> {{ st.savedId() ? 'Save' : 'Save as new' }}</button>
+  </div>
+  <div class="parts">
+    <div class="segmented">
+      <button [class.on]="st.part() === 'params'" (click)="st.part.set('params')">Params @if (params().length) { <span class="n">{{ params().length }}</span> }</button>
+      <button [class.on]="st.part() === 'headers'" (click)="st.part.set('headers')">Headers @if (st.headers().length) { <span class="n">{{ st.headers().length }}</span> }</button>
+      <button [class.on]="st.part() === 'body'" (click)="st.part.set('body')">Body @if (st.bodyType() !== 'none') { <span class="n">{{ st.bodyType() === 'text' ? '●' : st.bodyType() }}</span> }</button>
+      <button [class.on]="st.part() === 'auth'" (click)="st.part.set('auth')">Auth @if (st.auth().type !== 'none') { <span class="n">{{ st.auth().type }}</span> }</button>
+      <button [class.on]="st.part() === 'checks'" (click)="st.part.set('checks')" title="What the answer must look like">Checks @if (st.checks().length) { <span class="n">{{ st.checks().length }}</span> }</button>
+      <button [class.on]="st.part() === 'capture'" (click)="st.part.set('capture')" title="Keep values of the answer as variables, e.g. a log-in's token">Capture @if (st.captures().length) { <span class="n">{{ st.captures().length }}</span> }</button>
+    </div>
+  </div>
+  @if (st.part() === 'params') {
+    <div class="headers">
+      @for (q of params(); track $index; let i = $index) {
+        <div class="hrow">
+          <span></span>
+          <input class="mono" placeholder="name" [value]="q.name" (change)="setParam(i, 'name', $any($event.target).value)" />
+          <input class="mono" placeholder="value" [value]="q.value" (change)="setParam(i, 'value', $any($event.target).value)" />
+          <button class="ghost icon sm" title="Remove" (click)="removeParam(i)"><dd-icon name="close" [size]="12" /></button>
+        </div>
+      }
+      <button class="ghost sm add" (click)="addParam()"><dd-icon name="plus" [size]="12" /> Param</button>
+    </div>
+  } @else if (st.part() === 'headers') {
+    <div class="headers">
+      @for (h of st.headers(); track $index; let i = $index) {
+        <div class="hrow">
+          <input type="checkbox" [checked]="h.on" (change)="setHeader(i, 'on', $any($event.target).checked)" title="Send this header" />
+          <input class="mono" placeholder="Name" [value]="h.name" (input)="setHeader(i, 'name', $any($event.target).value)" />
+          <input class="mono" [placeholder]="hints.value" [value]="h.value" (input)="setHeader(i, 'value', $any($event.target).value)" />
+          <button class="ghost icon sm" title="Remove" (click)="removeHeader(i)"><dd-icon name="close" [size]="12" /></button>
+        </div>
+      }
+      <button class="ghost sm add" (click)="addHeader()"><dd-icon name="plus" [size]="12" /> Header</button>
+    </div>
+  } @else if (st.part() === 'body') {
+    <div class="bodytype">
+      <div class="segmented small-seg">
+        <button [class.on]="st.bodyType() === 'none'" (click)="setBodyType('none')">None</button>
+        <button [class.on]="st.bodyType() === 'text'" (click)="setBodyType('text')">Text / JSON</button>
+        <button [class.on]="st.bodyType() === 'form'" (click)="setBodyType('form')" title="application/x-www-form-urlencoded">Form</button>
+        <button [class.on]="st.bodyType() === 'multipart'" (click)="setBodyType('multipart')" title="multipart/form-data: fields and files">Files</button>
+        <button [class.on]="st.bodyType() === 'graphql'" (click)="setBodyType('graphql')" title="A GraphQL query and its variables">GraphQL</button>
+      </div>
+    </div>
+    @if (st.bodyType() === 'text') {
+      <div class="bodybox">
+        <textarea class="mono" spellcheck="false" placeholder='{"name": "Ada"}' [value]="st.body()" (input)="st.body.set($any($event.target).value)"></textarea>
+        <button class="ghost sm fmt" (click)="jsonBody()" title="Format as JSON and set Content-Type">JSON</button>
+      </div>
+    } @else if (st.bodyType() === 'graphql') {
+      <div class="gql">
+        <div class="gql-main">
+          <textarea class="mono q" spellcheck="false" placeholder="query { orders { id total } }" [value]="st.body()" (input)="st.body.set($any($event.target).value)"></textarea>
+          <textarea class="mono v" spellcheck="false" placeholder='variables (JSON): {"id": 1}' [value]="st.variables()" (input)="st.variables.set($any($event.target).value)"></textarea>
+        </div>
+        <div class="ops">
+          <button class="sm" (click)="loadSchema()" title="Ask the server which queries and mutations it has"><dd-icon name="download" [size]="12" /> Load schema</button>
+          @for (op of st.operations() ?? []; track op.kind + op.name) {
+            <button class="ghost op mono" (click)="useOperation(op)" [title]="op.example"><span class="k">{{ op.kind === 'query' ? 'Q' : 'M' }}</span> {{ op.name }}<span class="dim">: {{ op.returns }}</span></button>
+          } @empty {
+            @if (st.operations()) { <div class="dim small">The schema has no queries.</div> }
+          }
+        </div>
+      </div>
+    } @else if (st.bodyType() === 'form' || st.bodyType() === 'multipart') {
+      <div class="headers">
+        @for (f of st.form(); track $index; let i = $index) {
+          <div class="hrow" [class.frow]="st.bodyType() === 'multipart'">
+            <input type="checkbox" [checked]="f.on" (change)="setField(i, 'on', $any($event.target).checked)" title="Send this field" />
+            <input class="mono" placeholder="name" [value]="f.name" (input)="setField(i, 'name', $any($event.target).value)" />
+            <input class="mono" [placeholder]="f.file ? '/path/to/file' : 'value'" [value]="f.value" (input)="setField(i, 'value', $any($event.target).value)" [class.file]="f.file" />
+            @if (st.bodyType() === 'multipart') {
+              <button class="ghost sm" [class.on]="f.file" (click)="f.file ? setField(i, 'file', false) : pickFile(i)" [title]="f.file ? 'A file: click to make it text' : 'Pick a file to upload'">
+                <dd-icon name="upload" [size]="12" /> {{ f.file ? 'file' : 'File…' }}
+              </button>
+            }
+            <button class="ghost icon sm" title="Remove" (click)="removeField(i)"><dd-icon name="close" [size]="12" /></button>
+          </div>
+        }
+        <button class="ghost sm add" (click)="addField()"><dd-icon name="plus" [size]="12" /> Field</button>
+      </div>
+    } @else {
+      <div class="none small-none">No body. Pick Text/JSON, Form or Files to send one.</div>
+    }
+  } @else if (st.part() === 'auth') {
+    @let a = st.auth();
+    <div class="headers">
+      <div class="segmented small-seg">
+        <button [class.on]="a.type === 'none'" (click)="setAuth('none')">None</button>
+        <button [class.on]="a.type === 'bearer'" (click)="setAuth('bearer')">Bearer token</button>
+        <button [class.on]="a.type === 'basic'" (click)="setAuth('basic')">Basic</button>
+      </div>
+      @if (a.type === 'bearer') {
+        <div class="hrow single"><span class="dim">token</span><input class="mono" [value]="a.token" (input)="setAuthField('token', $any($event.target).value)" [placeholder]="hints.token" /></div>
+        <p class="dim tip">Sent as <span class="mono">Authorization: Bearer …</span>. Log in once with a request that captures <span class="mono">{{ hints.token }}</span> (Capture tab), and every request using it follows. Cookies a service sets are kept and sent back too.</p>
+      } @else if (a.type === 'basic') {
+        <div class="hrow single"><span class="dim">user</span><input class="mono" [value]="a.user" (input)="setAuthField('user', $any($event.target).value)" /></div>
+        <div class="hrow single"><span class="dim">password</span><input class="mono" type="password" [value]="a.password" (input)="setAuthField('password', $any($event.target).value)" [placeholder]="hints.value" /></div>
+      }
+    </div>
+  } @else if (st.part() === 'checks') {
+    <div class="headers">
+      @for (c of st.checks(); track $index; let i = $index) {
+        <div class="rule">
+          <select class="mono" [value]="c.part" (change)="setCheck(i, 'part', $any($event.target).value)">
+            @for (p of parts; track p.part) { <option [value]="p.part" [selected]="p.part === c.part">{{ p.label }}</option> }
+          </select>
+          @if (hasPath(c.part)) {
+            <input class="mono path" [placeholder]="c.part === 'json' ? 'data.items[0].id' : 'Content-Type'" [value]="c.path" (input)="setCheck(i, 'path', $any($event.target).value)" />
+          }
+          <select class="mono" [value]="c.op" (change)="setCheck(i, 'op', $any($event.target).value)">
+            @for (o of ops; track o.op) { <option [value]="o.op" [selected]="o.op === c.op">{{ o.label }}</option> }
+          </select>
+          @if (c.op !== 'exists') {
+            <input class="mono grow-in" placeholder="expected" [value]="c.expected" (input)="setCheck(i, 'expected', $any($event.target).value)" />
+          }
+          <button class="ghost icon sm" title="Remove" (click)="removeCheck(i)"><dd-icon name="close" [size]="12" /></button>
+        </div>
+      }
+      <button class="ghost sm add" (click)="addCheck()"><dd-icon name="plus" [size]="12" /> Check</button>
+      <p class="dim tip">Checked after each answer. A collection's Run sends its requests in order and shows which checks failed.</p>
+    </div>
+  } @else {
+    <div class="headers">
+      @for (c of st.captures(); track $index; let i = $index) {
+        <div class="rule">
+          <span class="dim">set</span>
+          <input class="mono var" placeholder="token" [value]="c.variable" (input)="setCapture(i, 'variable', $any($event.target).value)" />
+          <span class="dim">from</span>
+          <select class="mono" [value]="c.part" (change)="setCapture(i, 'part', $any($event.target).value)">
+            @for (p of parts; track p.part) { <option [value]="p.part" [selected]="p.part === c.part">{{ p.label }}</option> }
+          </select>
+          @if (hasPath(c.part)) {
+            <input class="mono grow-in" [placeholder]="c.part === 'json' ? 'access_token' : 'X-Request-Id'" [value]="c.path" (input)="setCapture(i, 'path', $any($event.target).value)" />
+          }
+          <button class="ghost icon sm" title="Remove" (click)="removeCapture(i)"><dd-icon name="close" [size]="12" /></button>
+        </div>
+      }
+      <button class="ghost sm add" (click)="addCapture()"><dd-icon name="plus" [size]="12" /> Capture</button>
+      <p class="dim tip">After a successful answer (below 400), the value is saved as a variable: a log-in request that captures <span class="mono">{{ hints.token }}</span> lets every other request use it.</p>
+    </div>
+  }
+</div>
+
+<div class="response">
+  @if (isSocket() && !st.error()) {
+    <div class="socket">
+      <div class="sbar">
+        <span class="sstate" [class]="'sstate s-' + (st.socketState() ?? 'none')">{{ st.socketState() ?? 'not connected' }}</span>
+        <span class="dim small">{{ st.socketEvents().length }} events</span>
+        <span class="grow"></span>
+        <button class="ghost sm" (click)="st.socketEvents.set([])">Clear</button>
+      </div>
+      <div class="slog mono">
+        @for (e of st.socketEvents(); track $index) {
+          <div class="sev" [class]="'sev d-' + e.direction"><span class="t">{{ clock(e.at) }}</span><span class="dir">{{ e.direction === 'in' ? '↓' : e.direction === 'out' ? '↑' : '·' }}</span><span class="txt">{{ e.text }}</span></div>
+        } @empty {
+          <div class="dim pad">Press Connect. Messages the server sends show here (↓), with what you send (↑).</div>
+        }
+      </div>
+      <div class="ssend">
+        <textarea class="mono" spellcheck="false" placeholder='message, e.g. {"type": "subscribe", "channel": "orders"}  (Ctrl+Enter sends)' [value]="st.outgoing()" (input)="st.outgoing.set($any($event.target).value)" (keydown.control.enter)="$event.stopPropagation(); sendMessage()"></textarea>
+        <button class="primary" [disabled]="st.socketState() !== 'open'" (click)="sendMessage()"><dd-icon name="send" [size]="12" /> Send</button>
+      </div>
+    </div>
+  } @else if (st.error(); as e) {
+    <div class="problem">
+      <dd-icon name="diagnosis" [size]="15" />
+      <div>{{ e }}</div>
+    </div>
+  } @else if (st.result(); as r) {
+    @if (r.outcome === 'failed') {
+      <div class="problem">
+        <dd-icon name="diagnosis" [size]="15" />
+        <div>
+          <div class="why">{{ r.explanation }}</div>
+          <div class="detail mono">{{ r.reason }} · {{ r.detail }} · {{ r.ms }} ms · {{ r.url }}</div>
+        </div>
+      </div>
+      @if (r.trace?.length) {
+        <div class="rbody">
+          @for (l of r.trace ?? []; track $index) {
+            <div class="tline mono" [class.err]="l.stream === 'stderr'"><span class="svc">{{ l.service }}</span><span class="txt">{{ l.text }}</span></div>
+          }
+        </div>
+      }
+    } @else {
+      <div class="rbar">
+        <span class="status mono {{ status() }}">{{ r.status }}</span>
+        <span class="mono dim">{{ r.version }} · {{ r.ms }} ms · {{ size(r.size) }}</span>
+        <span class="mono dim url-sent" [title]="r.url">{{ r.url }}</span>
+        @if (r.repeats?.length) {
+          <button class="ghost sm nplus1" (click)="st.view.set('sql')" [title]="r.repeats![0].advice">⚠ {{ r.repeats![0].identical ? 'same query' : 'N+1' }}: {{ r.repeats![0].times }}× one query</button>
+        }
+        <span class="grow"></span>
+        <div class="segmented">
+          <button [class.on]="st.view() === 'body'" (click)="st.view.set('body')">Body</button>
+          <button [class.on]="st.view() === 'headers'" (click)="st.view.set('headers')">Headers <span class="n">{{ r.headers.length }}</span></button>
+          <button [class.on]="st.view() === 'trace'" (click)="st.view.set('trace')" title="What every service logged while this request ran">Logs <span class="n">{{ r.trace?.length ?? 0 }}</span></button>
+          <button [class.on]="st.view() === 'sql'" (click)="st.view.set('sql'); checkLogging()" title="The SQL this request made the database run, with timings">SQL <span class="n">{{ r.queries?.length ?? 0 }}</span></button>
+        </div>
+        @if (st.view() === 'body' && !r.binary) {
+          <button class="ghost sm" [class.on]="st.pretty()" (click)="st.pretty.set(!st.pretty())">Pretty</button>
+          <button class="ghost icon sm" title="Copy the body" (click)="copy(r.body)"><dd-icon name="copy" [size]="12" /></button>
+          <button class="ghost sm" title="Make the mock server answer this request with this answer" (click)="mockThis()"><dd-icon name="box" [size]="12" /> Mock this</button>
+        }
+      </div>
+      @if (r.checks.length || r.captured.length) {
+        <div class="checks">
+          @for (c of r.checks; track $index) {
+            <span class="check" [class.fail]="!c.passed" [title]="c.passed ? 'passed' : 'got: ' + c.actual">
+              <dd-icon [name]="c.passed ? 'check' : 'close'" [size]="11" /> {{ c.label }}@if (!c.passed) { <span class="got">· got {{ c.actual }}</span> }
+            </span>
+          }
+          @for (c of r.captured; track c.variable) {
+            <span class="check cap" [class.fail]="!c.found">{{ '{{' + c.variable + '}}' }} {{ c.found ? '= ' + c.value : 'not found' }}</span>
+          }
+        </div>
+      }
+      <div class="rbody">
+        @if (st.view() === 'sql') {
+          @if (r.rows?.length) {
+            <div class="rowlinks">
+              @for (w of r.rows; track $index) {
+                <button class="sm" (click)="openRow(w)" [title]="'Open it in the Data page (' + w.service + ')'"><dd-icon name="table" [size]="12" /> {{ w.table }} {{ w.column }} = {{ w.value }} <span class="dim">{{ w.action }}</span></button>
+              }
+            </div>
+          }
+          @for (rep of r.repeats ?? []; track rep.shape) {
+            <div class="repeat">
+              <div class="rtitle">⚠ {{ rep.identical ? 'The very same query ran ' + rep.times + ' times' : 'One query ran ' + rep.times + ' times, once per item (N+1)' }} <span class="dim">· {{ rep.totalMs.toFixed(1) }} ms together · {{ rep.service }}</span></div>
+              <div class="mono small">{{ rep.example }}</div>
+              @if (rep.before && !rep.identical) { <div class="mono small dim">after: {{ rep.before }}</div> }
+              <div class="small">{{ rep.advice }}</div>
+            </div>
+          }
+          @for (q of r.queries ?? []; track $index) {
+            <div class="qline mono" [class.rep]="repeated(r, q.shape)"><span class="ms" [class.slow]="q.ms > 50">{{ q.ms < 1 ? q.ms.toFixed(2) : q.ms.toFixed(1) }} ms</span><span class="svc">{{ q.service }}</span><span class="sql">{{ q.sql }}@if (q.params) {<span class="dim"> · {{ q.params }}</span>}</span>@if (q.slow; as s) {<button class="ghost sm slowrank" (click)="openSlow(q.service, q.shape)" [title]="'In ' + q.service + '\'s slowest-queries list: ran ' + s.calls + ' times, ' + s.totalMs.toFixed(0) + ' ms in total. Open the list.'">#{{ s.rank }} slowest&nbsp;·&nbsp;{{ s.calls }}×&nbsp;·&nbsp;avg {{ s.meanMs < 1 ? s.meanMs.toFixed(2) : s.meanMs.toFixed(1) }} ms</button>} @else if (q.ms > 50) {<button class="ghost sm slowrank" (click)="openSlow(q.service, q.shape)" title="Open the database's own slowest-queries list">all-time list</button>}</div>
+          } @empty {
+            <div class="none">
+              @if (loggingOff().length) {
+                <p>No SQL seen: {{ loggingOff().join(', ') }} doesn't log its queries.</p>
+                @for (s of loggingOff(); track s) {
+                  <button class="sm" (click)="turnOnLogging(s)" title="Sets log_min_duration_statement = 0 on the running server (no restart). You can turn it off in the database's Size and users page.">Turn on query logging for {{ s }}</button>
+                }
+              } @else {
+                <p>This request ran no SQL that DevDesk could see.</p>
+              }
+            </div>
+          }
+        } @else if (st.view() === 'trace') {
+          @for (l of r.trace ?? []; track $index) {
+            <div class="tline mono" [class.err]="l.stream === 'stderr'"><span class="svc">{{ l.service }}</span><span class="txt">{{ l.text }}</span></div>
+          } @empty {
+            <div class="none">No service logged anything while this request ran.</div>
+          }
+        } @else if (st.view() === 'headers') {
+          <table class="mono">
+            @for (h of r.headers; track $index) { <tr><td class="hname">{{ h.name }}</td><td>{{ h.value }}</td></tr> }
+          </table>
+        } @else if (r.binary) {
+          <div class="none">Binary body ({{ size(r.size) }}): not shown as text.</div>
+        } @else if (r.body === '') {
+          <div class="none">Empty body.</div>
+        } @else {
+          <pre class="mono">{{ prettyBody() }}</pre>
+        }
+      </div>
+    }
+  } @else {
+    <div class="none center">
+      <dd-icon name="send" [size]="24" />
+      Press Send (Ctrl+Enter). The engine sends the request, so any local service works, CORS or not.
+    </div>
+  }
+</div>

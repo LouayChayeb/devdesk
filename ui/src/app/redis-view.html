@@ -1,0 +1,248 @@
+@let st = s();
+<div class="split">
+  <aside class="keys">
+    <div class="search">
+      <dd-icon name="search" [size]="13" />
+      <input #pat class="mono" [value]="st.pattern()" placeholder="pattern, e.g. user:*" (keydown.enter)="search(pat.value)" title="Redis pattern: * any text, ? one character, [abc] one of" />
+    </div>
+    <div class="meta mono">
+      {{ st.keys().length.toLocaleString() }} key{{ st.keys().length === 1 ? '' : 's' }}{{ st.done() ? '' : '+' }}
+      <span class="grow"></span>
+      <button class="ghost sm" title="Create a key" (click)="st.creating.set(!st.creating())"><dd-icon name="plus" [size]="11" /> Key</button>
+      <button class="ghost icon sm" title="Save every key matching {{ st.pattern() }} to a file (exact copies, with their expiry)" (click)="exportKeys()"><dd-icon name="download" [size]="12" /></button>
+      <button class="ghost icon sm" title="Put keys back from a file saved here" (click)="importKeys()"><dd-icon name="upload" [size]="12" /></button>
+      <button class="ghost icon sm" title="Delete every key matching {{ st.pattern() }} (shows them first)" (click)="previewDelete()"><dd-icon name="trash" [size]="12" /></button>
+      <button class="ghost icon sm" title="Reload keys" (click)="load(true)"><dd-icon name="restart" [size]="12" /></button>
+    </div>
+    @if (st.creating()) {
+      <div class="create">
+        <input #kn class="mono" placeholder="key name, e.g. user:42" ddAutofocus />
+        <select #kt class="mono" (change)="newType.set(kt.value)">
+          <option value="string">string</option><option value="hash">hash</option><option value="list">list</option>
+          <option value="set">set</option><option value="zset">sorted set</option>
+        </select>
+        <input #ka class="mono" [placeholder]="newType() === 'hash' ? 'first field' : newType() === 'string' ? 'value' : 'first ' + (newType() === 'list' ? 'element' : 'member')" />
+        @if (newType() === 'hash' || newType() === 'zset') {
+          <input #kb class="mono" [placeholder]="newType() === 'hash' ? 'its value' : 'score'" />
+          <button class="sm primary" (click)="create(kn.value, kt.value, ka.value, kb.value)">Create</button>
+        } @else {
+          <button class="sm primary" (click)="create(kn.value, kt.value, ka.value, '')">Create</button>
+        }
+      </div>
+    }
+    @if (st.bulk(); as b) {
+      <div class="bulk">
+        <div><b>{{ b.count.toLocaleString() }}</b> key{{ b.count === 1 ? '' : 's' }} match <span class="mono">{{ b.pattern }}</span>@if (b.count > b.sample.length) {, for example:} @else {:}</div>
+        <div class="sample mono">@for (k of b.sample; track k) { <span>{{ k }}</span> }</div>
+        <div class="bulk-actions">
+          <button class="sm ghost" (click)="st.bulk.set(null)">Cancel</button>
+          <button class="sm danger" [disabled]="b.count === 0" (click)="deleteMatching()"><dd-icon name="trash" [size]="12" /> Delete {{ b.count.toLocaleString() }} key{{ b.count === 1 ? '' : 's' }}</button>
+        </div>
+      </div>
+    }
+    @if (st.error(); as e) {
+      <div class="error mono">{{ e }}</div>
+    }
+    <div class="tree mono">
+      @for (n of rows(); track n.path) {
+        @if (n.folder) {
+          <button class="row folder" [style.padding-left.px]="8 + n.depth * 14" (click)="toggle(n.path)">
+            <dd-icon [name]="allOpen() || st.open().has(n.path) ? 'chevronDown' : 'chevronRight'" [size]="11" />
+            <span class="name">{{ n.name }}</span>
+            <span class="count">{{ n.count }}</span>
+          </button>
+        } @else {
+          <button class="row" [class.on]="st.selected() === n.path" [style.padding-left.px]="22 + n.depth * 14" (click)="pick(n.path)" [title]="n.path">
+            <span class="type {{ typeClass(n.key!.type) }}">{{ n.key!.type }}</span>
+            <span class="name">{{ n.name }}</span>
+            @if (n.key!.ttl !== null) { <span class="ttl" title="expires in {{ n.key!.ttl }} s">{{ ttl(n.key!.ttl) }}</span> }
+          </button>
+        }
+      } @empty {
+        @if (!st.loading() && !st.error()) { <div class="none">No keys match {{ st.pattern() }}.</div> }
+      }
+      @if (!st.done() && !st.error()) {
+        <button class="ghost sm more" [class.busy]="st.loading()" (click)="load(false)">Load more</button>
+      }
+    </div>
+  </aside>
+
+  <section class="value">
+    @if (st.value(); as v) {
+      <div class="head">
+        <span class="type big {{ typeClass(v.type) }}">{{ v.type }}</span>
+        <span class="keyname mono" [title]="v.key">{{ v.key }}</span>
+        <button class="ghost icon sm" title="Copy the key name" (click)="copy(v.key)"><dd-icon name="copy" [size]="12" /></button>
+        <span class="grow"></span>
+        <button class="ghost icon sm" title="Reload the value" (click)="reloadValue()"><dd-icon name="restart" [size]="13" /></button>
+        @if (st.deleting()) {
+          <span class="ask">Delete <b class="mono">{{ v.key }}</b> for good?</span>
+          <button class="sm ghost" (click)="st.deleting.set(false)">Keep</button>
+          <button class="sm danger" (click)="remove()"><dd-icon name="trash" [size]="12" /> Delete</button>
+        } @else {
+          <button class="sm ghost" (click)="remove()" title="Delete this key (asks first)"><dd-icon name="trash" [size]="12" /> Delete</button>
+        }
+      </div>
+      <div class="facts mono">
+        <span>{{ v.length < 0 ? '?' : v.length.toLocaleString() }} {{ v.type === 'string' ? 'characters' : v.type === 'hash' ? 'fields' : v.type === 'stream' ? 'entries' : 'elements' }}</span>
+        @if (v.length > shown(v) && v.type !== 'string') { <span class="dim">showing {{ shown(v).toLocaleString() }}</span> }
+        <span class="ttlbox">
+          TTL
+          <input #ttlIn class="mono" [value]="v.ttl === null ? '' : Math.round(v.ttl)" placeholder="never" (keydown.enter)="setTtl(ttlIn.value)" title="Seconds until Redis deletes the key; empty: never" />
+          <span class="dim">s</span>
+          <button class="sm ghost" (click)="setTtl(ttlIn.value)">Set</button>
+          @if (v.ttl !== null) { <button class="sm ghost" (click)="setTtl('')" title="Remove the expiry (PERSIST)">Never expire</button> }
+        </span>
+        @if (v.text !== undefined) {
+          <span class="grow"></span>
+          <div class="segmented">
+            <button [class.on]="st.pretty()" (click)="st.pretty.set(true)">Pretty</button>
+            <button [class.on]="!st.pretty()" (click)="st.pretty.set(false)">Raw</button>
+          </div>
+        }
+      </div>
+      @if (st.valueError(); as e) { <div class="error mono">{{ e }}</div> }
+      <div class="body">
+        @let ed = st.editing();
+        @let armed = st.armed();
+        @if (v.text !== undefined) {
+          @if (ed === 'text') {
+            <div class="text-edit">
+              <textarea #tx class="mono" spellcheck="false" ddAutofocus [value]="v.type === 'ReJSON-RL' ? text(v) : v.text"></textarea>
+              <div class="row-actions">
+                <button class="sm ghost" (click)="st.editing.set(null)">Cancel</button>
+                <button class="sm primary" (click)="saveText(v, tx.value)"><dd-icon name="save" [size]="12" /> Save</button>
+              </div>
+            </div>
+          } @else {
+            @if (canEditText(v)) {
+              <button class="sm ghost edit-text" (click)="st.editing.set('text')"><dd-icon name="edit" [size]="12" /> Edit</button>
+            }
+            <pre class="mono text">{{ text(v) }}</pre>
+          }
+        } @else if (v.items) {
+          <table class="mono">
+            <thead><tr><th class="idx">{{ v.type === 'list' ? 'index' : '#' }}</th><th>value</th><th class="act"></th></tr></thead>
+            <tbody>
+              @for (x of v.items; track $index; let i = $index) {
+                <tr>
+                  <td class="idx">{{ i }}</td>
+                  @if (ed === 'i:' + i) {
+                    <td class="cell-edit"><input #ie class="mono" ddAutofocus [value]="x" (keydown.enter)="apply({ op: 'list-set', index: i, value: ie.value })" (keydown.escape)="st.editing.set(null)" (blur)="st.editing.set(null)" /></td>
+                  } @else {
+                    <td (dblclick)="v.type === 'list' && st.editing.set('i:' + i)" [title]="v.type === 'list' ? 'Double-click to edit' : ''">{{ x }}</td>
+                  }
+                  <td class="act">
+                    <button class="ghost icon sm rm" [class.armed]="armed === 'i:' + i" [title]="armed === 'i:' + i ? 'Click again to remove' : 'Remove'"
+                      (click)="v.type === 'list' ? remove2('i:' + i, { op: 'list-remove', index: i }) : remove2('i:' + i, { op: 'set-remove', member: x })">
+                      <dd-icon name="trash" [size]="11" />
+                    </button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          <div class="add-row">
+            <input #nv class="mono" [placeholder]="v.type === 'list' ? 'new element' : 'new member'" (keydown.enter)="v.type === 'list' ? apply({ op: 'list-push', value: nv.value, head: false }) : apply({ op: 'set-add', member: nv.value })" />
+            @if (v.type === 'list') {
+              <button class="sm ghost" (click)="apply({ op: 'list-push', value: nv.value, head: true })">Add to start</button>
+              <button class="sm" (click)="apply({ op: 'list-push', value: nv.value, head: false })"><dd-icon name="plus" [size]="11" /> Add to end</button>
+            } @else {
+              <button class="sm" (click)="apply({ op: 'set-add', member: nv.value })"><dd-icon name="plus" [size]="11" /> Add</button>
+            }
+          </div>
+        } @else if (v.fields) {
+          <table class="mono">
+            <thead><tr><th>field</th><th>value</th><th class="act"></th></tr></thead>
+            <tbody>
+              @for (f of v.fields; track f.name) {
+                <tr>
+                  <td class="fname">{{ f.name }}</td>
+                  @if (ed === 'f:' + f.name) {
+                    <td class="cell-edit"><input #fe class="mono" ddAutofocus [value]="f.value" (keydown.enter)="apply({ op: 'hash-set', field: f.name, value: fe.value })" (keydown.escape)="st.editing.set(null)" (blur)="st.editing.set(null)" /></td>
+                  } @else {
+                    <td (dblclick)="st.editing.set('f:' + f.name)" title="Double-click to edit">{{ f.value }}</td>
+                  }
+                  <td class="act">
+                    <button class="ghost icon sm rm" [class.armed]="armed === 'f:' + f.name" [title]="armed === 'f:' + f.name ? 'Click again to remove' : 'Remove field'" (click)="remove2('f:' + f.name, { op: 'hash-delete', field: f.name })">
+                      <dd-icon name="trash" [size]="11" />
+                    </button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          <div class="add-row">
+            <input #hf class="mono" placeholder="field" />
+            <input #hv class="mono grow-in" placeholder="value" (keydown.enter)="apply({ op: 'hash-set', field: hf.value, value: hv.value })" />
+            <button class="sm" (click)="apply({ op: 'hash-set', field: hf.value, value: hv.value })"><dd-icon name="plus" [size]="11" /> Set field</button>
+          </div>
+        } @else if (v.scored) {
+          <table class="mono">
+            <thead><tr><th>member</th><th class="num">score</th><th class="act"></th></tr></thead>
+            <tbody>
+              @for (m of v.scored; track m.member) {
+                <tr>
+                  <td>{{ m.member }}</td>
+                  @if (ed === 's:' + m.member) {
+                    <td class="cell-edit num"><input #se class="mono" ddAutofocus [value]="m.score" (keydown.enter)="apply({ op: 'score-set', member: m.member, score: +se.value })" (keydown.escape)="st.editing.set(null)" (blur)="st.editing.set(null)" /></td>
+                  } @else {
+                    <td class="num" (dblclick)="st.editing.set('s:' + m.member)" title="Double-click to change the score">{{ m.score }}</td>
+                  }
+                  <td class="act">
+                    <button class="ghost icon sm rm" [class.armed]="armed === 's:' + m.member" [title]="armed === 's:' + m.member ? 'Click again to remove' : 'Remove'" (click)="remove2('s:' + m.member, { op: 'score-remove', member: m.member })">
+                      <dd-icon name="trash" [size]="11" />
+                    </button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          <div class="add-row">
+            <input #zm class="mono grow-in" placeholder="member" />
+            <input #zs class="mono score-in" placeholder="score" (keydown.enter)="apply({ op: 'score-set', member: zm.value, score: +zs.value })" />
+            <button class="sm" (click)="apply({ op: 'score-set', member: zm.value, score: +zs.value })"><dd-icon name="plus" [size]="11" /> Add</button>
+          </div>
+        } @else if (v.entries) {
+          <table class="mono">
+            <thead><tr><th>id</th><th>fields</th></tr></thead>
+            <tbody>
+              @for (e of v.entries; track e.id) {
+                <tr><td class="fname">{{ e.id }}</td><td>@for (f of e.fields; track $index) { <span class="pair"><b>{{ f.name }}</b> {{ f.value }}</span> }</td></tr>
+              }
+            </tbody>
+          </table>
+          <dd-stream-groups [service]="spec().service" [streamKey]="v.key" (changed)="pick(v.key)" />
+        } @else {
+          <div class="none">DevDesk can't show the type "{{ v.unsupported }}" yet (it comes from a Redis module). Use the command box below.</div>
+        }
+      </div>
+    } @else if (st.valueError(); as e) {
+      <div class="error mono">{{ e }}</div>
+    } @else {
+      <div class="none center">Pick a key on the left to see its value.</div>
+    }
+
+    <div class="console">
+      <div class="log mono">
+        @for (l of st.log(); track $index) {
+          <div class="entry"><span class="prompt">›</span> {{ l.line }}</div>
+          <pre class="reply" [class.err]="l.error">{{ l.reply }}</pre>
+        }
+        @if (st.confirm(); as c) {
+          <div class="confirm">
+            <dd-icon name="diagnosis" [size]="13" />
+            <span class="grow">{{ c.why }}. Run <b class="mono">{{ c.line }}</b> anyway?</span>
+            <button class="sm ghost" (click)="st.confirm.set(null)">Cancel</button>
+            <button class="sm danger" (click)="run(c.line, true)">Run it</button>
+          </div>
+        }
+        <span class="log-end"></span>
+      </div>
+      <div class="prompt-line">
+        <span class="prompt mono">{{ spec().service }}›</span>
+        <input #cmd class="mono" placeholder="any Redis command, e.g. HGETALL user:1  (↑ for previous)" (keydown)="cmdKey($event, cmd)" spellcheck="false" />
+      </div>
+    </div>
+  </section>
+</div>

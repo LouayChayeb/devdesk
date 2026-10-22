@@ -50,6 +50,7 @@
               }
             ],
             "styles": [
+              "node_modules/@xterm/xterm/css/xterm.css",
               "src/styles.css"
             ]
           },
@@ -58,13 +59,13 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "500kB",
+                  "maximumWarning": "900kB",
                   "maximumError": "1MB"
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "4kB",
-                  "maximumError": "8kB"
+                  "maximumWarning": "12kB",
+                  "maximumError": "24kB"
                 }
               ],
               "outputHashing": "all"

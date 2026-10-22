@@ -1,15 +1,26 @@
 import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { Engine, History, HistoryItem } from './engine';
 import { bytes, time } from './format';
+import { StartupChart } from './startup-chart';
 
 /** The flight recorder's timeline (ADR 0008), like `devdesk history`. The engine decides what's routine or unclean. */
 @Component({
   selector: 'dd-timeline',
+  imports: [StartupChart],
   template: `
+    <div class="views segmented">
+      <button [class.on]="view() === 'events'" (click)="view.set('events')">Events</button>
+      <button [class.on]="view() === 'startup'" (click)="view.set('startup')" title="How long each service took to start, and what it waited for">Startup</button>
+    </div>
+    @if (view() === 'startup') {
+      <dd-startup />
+    } @else {
     <div class="bar">
-      @for (h of ranges; track h.hours) {
-        <button class="ghost" [class.on]="hours() === h.hours" (click)="setHours(h.hours)">{{ h.label }}</button>
-      }
+      <div class="segmented">
+        @for (h of ranges; track h.hours) {
+          <button [class.on]="hours() === h.hours" (click)="setHours(h.hours)">{{ h.label }}</button>
+        }
+      </div>
       <label><input type="checkbox" [checked]="showRoutine()" (change)="showRoutine.set(!showRoutine())" /> routine states</label>
       <span class="grow"></span>
       @if (history(); as h) {
@@ -43,11 +54,12 @@ import { bytes, time } from './format';
         </div>
       }
     </div>
+    }
   `,
   styles: `
     :host { display: block; padding: 12px 16px; }
+    .views { margin-bottom: 12px; }
     .bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: var(--text-2); font-size: var(--fs-sm); }
-    .bar .on { background: var(--bg-3); color: var(--text-1); }
     .bar label { margin-left: 8px; display: flex; gap: 4px; align-items: center; }
     .grow { flex: 1; }
     .folder { color: var(--text-3); }
@@ -55,7 +67,7 @@ import { bytes, time } from './format';
     .spark { display: flex; align-items: center; gap: 8px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 8px; }
     .spark .svc { width: 70px; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-sm); }
     .spark svg { flex: 1; height: 20px; }
-    .spark polyline { fill: none; stroke: var(--accent, #4f8cff); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+    .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
     .spark .num { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
     .dim { color: var(--text-3); }
     .none { color: var(--text-2); padding: 24px 0; }
@@ -83,6 +95,8 @@ export class TimelinePanel implements OnInit, OnDestroy {
     { hours: 24 * 7, label: '7d' },
   ];
   readonly hours = signal(24);
+  /** Events: the flight recorder's list. Startup: the chart of the last startups. */
+  readonly view = signal<'events' | 'startup'>('events');
   readonly showRoutine = signal(false);
   readonly history = signal<History | null>(null);
   private timer?: ReturnType<typeof setInterval>;

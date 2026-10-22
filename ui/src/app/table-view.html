@@ -1,0 +1,203 @@
+@let st = s();
+<div class="bar">
+  <div class="segmented">
+    <button [class.on]="st.view() === 'rows'" (click)="st.view.set('rows')">Rows</button>
+    <button [class.on]="st.view() === 'structure'" (click)="st.view.set('structure')">Structure</button>
+  </div>
+  <span class="where mono">{{ spec().schema }}.<b>{{ spec().table }}</b></span>
+  <span class="grow"></span>
+  @if (st.view() === 'rows') {
+    @if (editable()) {
+      <span class="hint">Double-click a cell to edit</span>
+    } @else if (st.structure() && !isView()) {
+      <span class="ro" title="Rows are found by their primary key; this table has none, so only new rows can be added">
+        <dd-icon name="shield" [size]="12" /> no primary key: new rows only
+      </span>
+    } @else if (isView()) {
+      <span class="ro"><dd-icon name="eye" [size]="12" /> view: read-only</span>
+    }
+    @if (!isView()) {
+      <button class="sm" (click)="addRow()" [disabled]="!st.structure()"><dd-icon name="plus" [size]="12" /> Row</button>
+    }
+    <span class="filemenu">
+      <button class="ghost sm" (click)="fileMenu.set(fileMenu() ? null : 'export')" title="Every row that matches the filters, to a file"><dd-icon name="download" [size]="12" /> Export</button>
+      @if (fileMenu() === 'export') {
+        <div class="menu">
+          <button (click)="exportAs('csv')">CSV</button>
+          <button (click)="exportAs('json')">JSON</button>
+          <button (click)="exportAs('sql')">SQL inserts</button>
+        </div>
+      }
+    </span>
+    @if (!isView()) {
+      <button class="ghost sm" [disabled]="st.dirty()" (click)="importFile()" title="Insert rows from a CSV or JSON file, or run a SQL file: all in one transaction"><dd-icon name="upload" [size]="12" /> Import</button>
+      <button class="ghost sm" [disabled]="st.dirty()" (click)="fakeOpen.set(true)" title="Fill the table with made-up rows: names, emails, dates… by column"><dd-icon name="plus" [size]="12" /> Test rows</button>
+    }
+    <button class="ghost icon sm" title="Reload" [disabled]="st.dirty()" (click)="load()"><dd-icon name="restart" [size]="13" /></button>
+  } @else if (!isView()) {
+    <button class="sm" (click)="changeTable()" title="Add, rename or change columns, keys, indexes and links with a form"><dd-icon name="edit" [size]="12" /> Change table…</button>
+  }
+</div>
+
+@if (st.view() === 'rows') {
+  <div class="filters">
+    @for (f of st.filters(); track $index; let i = $index) {
+      <span class="chip mono">
+        {{ f.column }} {{ opLabel(f.op) }} @if (needsValue(f.op)) { "{{ f.value }}" }
+        <button class="ghost icon sm" title="Remove" [disabled]="st.dirty()" (click)="removeFilter(i)"><dd-icon name="close" [size]="11" /></button>
+      </span>
+    }
+    <select #fcol class="sm-select" [disabled]="st.dirty()">
+      @for (c of st.structure()?.columns ?? []; track c.name) { <option [value]="c.name">{{ c.name }}</option> }
+    </select>
+    <select #fop class="sm-select" [disabled]="st.dirty()">
+      @for (o of ops; track o.op) { <option [value]="o.op">{{ o.label }}</option> }
+    </select>
+    <input #fval class="fval mono" placeholder="value" [disabled]="st.dirty()" (keydown.enter)="addFilter(fcol.value, $any(fop.value), fval.value); fval.value = ''" />
+    <button class="sm" [disabled]="st.dirty()" (click)="addFilter(fcol.value, $any(fop.value), fval.value); fval.value = ''"><dd-icon name="plus" [size]="12" /> Filter</button>
+  </div>
+
+  @if (st.error(); as e) {
+    <div class="error mono">{{ e }}</div>
+  }
+  @if (st.result(); as r) {
+    <div class="meta">
+      rows {{ st.offset() + 1 }}–{{ st.offset() + r.rows.length }}{{ r.more ? '+' : '' }} · {{ r.ms }} ms
+      <span class="grow"></span>
+      <button class="ghost sm" [disabled]="st.offset() === 0 || st.dirty()" (click)="page(-1)">← Previous</button>
+      <button class="ghost sm" [disabled]="!r.more || st.dirty()" (click)="page(1)">Next →</button>
+    </div>
+    <div class="grid">
+      <table class="mono">
+        <thead>
+          <tr>
+            <th class="gutter"></th>
+            @for (c of r.columns; track $index; let i = $index) {
+              <th (click)="sortBy(c)" class="sortable" [title]="st.dirty() ? 'Save or discard your changes to sort' : r.types[i]">
+                @if (isPk(c)) { <span class="pk" title="primary key">●</span> }
+                {{ c }}
+                @if (st.orderBy() === c) { <span class="arrow">{{ st.desc() ? '▼' : '▲' }}</span> }
+                <span class="type">{{ r.types[i] }}</span>
+              </th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of st.added(); track $index; let n = $index) {
+            <tr class="added">
+              <td class="gutter">
+                <button class="ghost icon sm" title="Remove this new row" (click)="removeAdded(n)"><dd-icon name="close" [size]="12" /></button>
+              </td>
+              @for (c of r.columns; track $index) {
+                @let ed = editing();
+                @if (ed && ed.row === -1 - n && ed.col === c) {
+                  <td class="editing">
+                    <input #box class="mono cell-input" [value]="row[c] ?? ''" (keydown)="inputKey($event, -1 - n, c, box, null)" (blur)="commit(-1 - n, c, box.value, null)" ddAutofocus />
+                    <button class="ghost sm null-btn" title="Set NULL" (mousedown)="$event.preventDefault(); commit(-1 - n, c, null, null)">NULL</button>
+                  </td>
+                } @else {
+                  <td (dblclick)="startEdit(-1 - n, c)" (click)="startEdit(-1 - n, c)" [class.null]="row[c] === null" [class.default]="!(c in row)">
+                    {{ !(c in row) ? 'default' : row[c] === null ? 'NULL' : row[c] }}
+                  </td>
+                }
+              }
+            </tr>
+          }
+          @for (row of r.rows; track $index; let ri = $index) {
+            <tr [class.deleted]="st.deleted().has(ri)">
+              <td class="gutter">
+                @if (editable()) {
+                  <button class="ghost icon sm del" [title]="st.deleted().has(ri) ? 'Keep this row' : 'Delete this row (asks when you save)'" (click)="toggleDelete(ri)">
+                    <dd-icon [name]="st.deleted().has(ri) ? 'undo' : 'trash'" [size]="12" />
+                  </button>
+                }
+              </td>
+              @for (orig of row; track $index; let i = $index) {
+                @let c = r.columns[i];
+                @let v = value(ri, i, orig);
+                @let ed = editing();
+                @if (ed && ed.row === ri && ed.col === c) {
+                  <td class="editing">
+                    <input #box class="mono cell-input" [value]="v ?? ''" (keydown)="inputKey($event, ri, c, box, orig)" (blur)="commit(ri, c, box.value, orig)" ddAutofocus />
+                    <button class="ghost sm null-btn" title="Set NULL" (mousedown)="$event.preventDefault(); commit(ri, c, null, orig)">NULL</button>
+                  </td>
+                } @else {
+                  <td [class.null]="v === null" [class.changed]="changed(ri, c)" [title]="changed(ri, c) ? 'was: ' + (orig ?? 'NULL') : (v ?? 'NULL')" (dblclick)="startEdit(ri, c)">
+                    @if (v !== null && !changed(ri, c) && link(c); as fk) {
+                      <a (click)="follow(fk, v)" title="Open {{ fk.toTable }} where {{ fk.toColumns[0] }} = {{ v }}">{{ v }}</a>
+                    } @else {
+                      {{ v === null ? 'NULL' : v }}
+                    }
+                  </td>
+                }
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+      @if (r.rows.length === 0 && st.added().length === 0) { <div class="none">No rows.</div> }
+    </div>
+  } @else if (st.busy()) {
+    <div class="none">Loading…</div>
+  }
+
+  @if (st.dirty() || st.saveError()) {
+    <div class="pending" [class.danger]="st.confirming()">
+      @if (st.confirming()) {
+        <dd-icon name="trash" [size]="14" />
+        <span class="grow">
+          Save will <b>delete {{ st.pending().deleted }} row{{ st.pending().deleted === 1 ? '' : 's' }}</b> from {{ spec().table }} for good. Continue?
+        </span>
+        <button class="sm ghost" (click)="st.confirming.set(false)">Back</button>
+        <button class="sm danger" (click)="save()">Delete and save</button>
+      } @else {
+        <span class="dot"></span>
+        <span class="grow">
+          @if (st.saveError(); as err) {
+            <span class="save-err mono">{{ err }}</span>
+          } @else {
+            Pending changes:
+            @if (st.pending().added) { <span class="n add">{{ st.pending().added }} new</span> }
+            @if (st.pending().changed) { <span class="n chg">{{ st.pending().changed }} changed</span> }
+            @if (st.pending().deleted) { <span class="n removed">{{ st.pending().deleted }} deleted</span> }
+            <span class="dim">· nothing is written until you save</span>
+          }
+        </span>
+        <button class="sm ghost" (click)="st.discard()"><dd-icon name="undo" [size]="12" /> Discard</button>
+        <button class="sm primary" [class.busy]="st.saving()" [disabled]="!st.dirty()" (click)="save()" title="Ctrl+S"><dd-icon name="save" [size]="12" /> Save</button>
+      }
+    </div>
+  }
+} @else if (st.structure(); as sv) {
+  <div class="structure">
+    <h4>Columns</h4>
+    <table class="mono">
+      <thead><tr><th>Name</th><th>Type</th><th>Null</th><th>Default</th></tr></thead>
+      <tbody>
+        @for (c of sv.columns; track c.name) {
+          <tr>
+            <td>@if (c.primaryKey) { <span class="pk" title="primary key">●</span> }{{ c.name }}</td>
+            <td class="dim">{{ c.type }}</td>
+            <td>{{ c.nullable ? 'yes' : 'no' }}</td>
+            <td class="dim">{{ c.default ?? '' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <h4>Indexes</h4>
+    @for (x of sv.indexes; track x.name) {
+      <div class="line mono">{{ x.name }} <span class="dim">({{ x.columns.join(', ') }})</span> @if (x.unique) { <span class="tag">unique</span> }</div>
+    } @empty { <div class="dim small">none</div> }
+    <h4>Links to other tables</h4>
+    @for (f of sv.foreignKeys; track f.name) {
+      <div class="line mono">
+        {{ f.columns.join(', ') }} → <a (click)="openTable(f.toSchema, f.toTable)">{{ f.toTable }}</a><span class="dim">({{ f.toColumns.join(', ') }})</span>
+      </div>
+    } @empty { <div class="dim small">none</div> }
+  </div>
+}
+
+@if (fakeOpen()) {
+  <dd-fake-rows [service]="spec().service" [schema]="spec().schema" [table]="spec().table"
+                (close)="fakeOpen.set(false)" (inserted)="toast.emit('Added ' + $event + ' test rows'); load()" />
+}

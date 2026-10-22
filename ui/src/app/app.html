@@ -1,82 +1,181 @@
+@if (popout; as pd) {
+  <div class="popout">
+    <header class="pop-head mono">
+      <span class="crumb root">{{ engine.project()?.name ?? '…' }}</span><span class="sep">/</span><span class="crumb last">{{ pd.title }}</span>
+      <span class="grow-text"></span>
+      <span class="dim small">engine {{ engine.status() }}</span>
+    </header>
+    @if (engine.project()) {
+      <dd-doc-view class="pop-body" [doc]="pd" (toast)="toast($event)" />
+    } @else {
+      <div class="empty"><p class="dim">Connecting to the engine…</p></div>
+    }
+  </div>
+} @else {
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand"><span class="logo">◧</span> DevDesk</div>
-    <div class="section-label">Projects</div>
-    @for (r of projects(); track r) {
-      <button class="project" [class.active]="engine.project()?.root === r" (click)="open(r)" [title]="r">
-        @if (engine.project()?.root === r) {
+    <div class="brand">
+      <svg class="logo" width="20" height="20" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" /><path d="M8 8v8M12 8v8M16 8v8" /></svg>
+      DevDesk
+    </div>
+
+    <div class="switcher">
+      <button class="current" (click)="projectMenu.set(!projectMenu())" [title]="engine.project()?.root ?? 'Open a project'">
+        @if (engine.project(); as p) {
           <dd-dot [label]="summaryLabel()" />
+          <span class="pname">{{ p.name }}</span>
         } @else {
-          <dd-dot label="stopped" />
+          <span class="pname dim">No project</span>
         }
-        <span class="project-name">{{ base(r) }}</span>
+        <dd-icon name="chevronDown" [size]="13" />
       </button>
+      @if (projectMenu()) {
+        <div class="menu-scrim" (click)="projectMenu.set(false)"></div>
+        <div class="menu">
+          <div class="menu-label">Projects <span class="grow"></span><kbd title="Switch project from anywhere">Ctrl O</kbd></div>
+          @for (r of projects(); track r) {
+            <button class="project" [class.active]="engine.project()?.root === r" (click)="pickProject(r)" [title]="r">
+              <dd-dot [label]="engine.project()?.root === r ? summaryLabel() : 'stopped'" />
+              <span class="project-name">{{ base(r) }}</span>
+              <span class="project-path mono">{{ short(r) }}</span>
+            </button>
+          } @empty {
+            <div class="dim small pad">No recent projects.</div>
+          }
+          <div class="menu-sep"></div>
+          <button class="ghost wide" (click)="pickFolder()"><dd-icon name="plus" [size]="14" /> Add project folder</button>
+          @if (engine.project()) {
+            <button class="ghost wide" (click)="editSetup()"><dd-icon name="edit" [size]="14" /> Edit setup</button>
+            <button class="ghost wide" (click)="projectMenu.set(false); envOpen.set(true)"><dd-icon name="key" [size]="14" /> Environment (.env files)</button>
+            <button class="ghost wide" (click)="projectMenu.set(false); remoteOpen.set(true)" title="Deploy it to a server, or run it on a stronger machine as a dev box"><dd-icon name="upload" [size]="14" /> Run on another machine…</button>
+            <button class="ghost wide" (click)="projectMenu.set(false); snapshotsOpen.set(true)"><dd-icon name="archive" [size]="14" /> Snapshots (save / restore data)</button>
+            <button class="ghost wide" (click)="freshSetup()" title="For a fresh clone: .env, packages, images, one-time jobs"><dd-icon name="download" [size]="14" /> Set up (install everything)</button>
+          }
+          <input
+            class="mono"
+            placeholder="or type a path and press Enter…"
+            [value]="pathInput()"
+            (input)="pathInput.set($any($event.target).value)"
+            (keydown.enter)="open(pathInput())"
+          />
+        </div>
+      }
+    </div>
+
+    @if (engine.project()) {
+      <nav class="nav">
+        @for (g of nav; track g.group) {
+          <div class="group">{{ g.group }}</div>
+          @for (it of g.pages; track it.id) {
+            <button class="nav-item" [class.on]="page() === it.id" (click)="setPage(it.id)" [title]="it.label + ' (' + keyOf(it.id) + ')'">
+              <dd-icon [name]="it.icon" [size]="15" />
+              <span class="nav-label">{{ it.label }}</span>
+              @if (it.id === 'diagnosis' && findingCount() > 0) {
+                <span class="badge">{{ findingCount() }}</span>
+              }
+              <span class="key mono">{{ keyOf(it.id) }}</span>
+            </button>
+          }
+        }
+      </nav>
     }
     <div class="spacer"></div>
-    <div class="open">
-      <button class="ghost wide" (click)="pickFolder()">+ Add project folder</button>
-      <input
-        class="mono"
-        placeholder="or type a path…"
-        [value]="pathInput()"
-        (input)="pathInput.set($any($event.target).value)"
-        (keydown.enter)="open(pathInput())"
-      />
-    </div>
+    @if (engine.project()) {
+      <button class="search" (click)="openPalette()" title="Find services, tables, keys, requests and commands">
+        <dd-icon name="search" [size]="14" /> <span class="grow-text">Search…</span> <kbd>Ctrl K</kbd>
+      </button>
+    }
   </aside>
 
   <main class="main">
     @if (engine.project(); as p) {
       <header class="header">
-        <div class="title">
-          <div class="name">{{ p.name }}</div>
-          <div class="path mono">{{ short(p.root) }}</div>
-        </div>
-        <div class="summary">
-          <dd-dot [label]="summaryLabel()" />
-          <span>{{ healthyCount() }}/{{ services().length }} up</span>
-        </div>
+        <nav class="crumbs mono" aria-label="Where you are">
+          <span class="crumb root" [title]="p.root">{{ p.name }}</span>
+          @for (c of crumbs(); track $index; let last = $last) {
+            <span class="sep">/</span>
+            <span class="crumb" [class.last]="last">{{ c }}</span>
+          }
+        </nav>
         <div class="actions">
-          <button class="ghost" (click)="check()" title="Check for problems without starting anything">Check</button>
+          @if (engine.project()?.branch; as b) {
+            <span class="branch mono" [title]="engine.project()?.perBranch?.length ? 'Data kept per branch for: ' + engine.project()!.perBranch!.join(', ') + '. Switching branch swaps it.' : 'The project folder\'s git branch'">⎇ {{ b }}@if (engine.project()?.perBranch?.length) { <span class="dim">&nbsp;· own data</span> }</span>
+          }
+          @if (engine.project()?.profiles?.length) {
+            <select class="profile" [value]="engine.project()?.profile ?? ''" [disabled]="engine.running()"
+                    [title]="engine.running() ? 'Stop the project to switch profile' : 'Settings profile from devdesk.yaml'"
+                    (change)="selectProfile($any($event.target).value)">
+              <option value="">default settings</option>
+              @for (p of engine.project()!.profiles!; track p) { <option [value]="p">profile: {{ p }}</option> }
+            </select>
+          }
+          <button (click)="snapshotsOpen.set(true)" title="Save all databases, Redis and .env files under a name, and jump back to it"><dd-icon name="archive" [size]="14" /> Snapshots</button>
+          <button [class.busy]="checking()" (click)="check()" title="Check this machine and the project without starting anything (like devdesk doctor)"><dd-icon name="check" [size]="14" /> Check</button>
           @if (engine.running()) {
-            <button (click)="stop()" title="Ctrl+Enter">■ Stop</button>
+            <button class="danger" [class.busy]="busy()" (click)="stop()" title="Stop everything (Ctrl+Enter)"><dd-icon name="stop" [size]="12" /> Stop all</button>
           } @else {
-            <button class="primary" [disabled]="busy()" (click)="start()" title="Ctrl+Enter">▶ Start</button>
+            <button class="primary" [class.busy]="busy()" [disabled]="busy()" (click)="start()" title="Start everything (Ctrl+Enter)"><dd-icon name="play" [size]="12" /> Start all</button>
           }
         </div>
       </header>
       @if (!p.trusted && !engine.running()) {
         <div class="banner warn">
-          This project isn't trusted yet (or devdesk.yaml changed). Nothing runs until you review its commands.
-          <button class="ghost" (click)="trustOpen.set(true)">Review commands</button>
+          <dd-icon name="shield" [size]="16" />
+          <span class="grow-text">This project isn't trusted yet (or devdesk.yaml changed). Nothing runs until you review its commands.</span>
+          <button class="sm" (click)="trustOpen.set(true)">Review commands</button>
         </div>
       }
       @if (actionError(); as err) {
-        <div class="banner err">{{ err }}</div>
+        <div class="banner err">
+          <dd-icon name="diagnosis" [size]="16" />
+          <span class="grow-text">{{ err }}</span>
+          <button class="ghost icon sm" title="Dismiss" (click)="actionError.set(null)"><dd-icon name="close" [size]="14" /></button>
+        </div>
       }
-      <nav class="tabs">
-        <button class="tab" [class.on]="tab() === 'services'" (click)="tab.set('services')">Services</button>
-        <button class="tab" [class.on]="tab() === 'diagnosis'" (click)="tab.set('diagnosis')">
-          Diagnosis
-          @if (findingCount() > 0) {
-            <span class="badge">{{ findingCount() }}</span>
+      <div class="stage">
+        <section class="content" [attr.data-page]="page()" [class.flush]="isWork()">
+          @switch (page()) {
+            @case ('services') {
+              <dd-tasks />
+              <dd-services
+                [selected]="selected()"
+                (select)="selected.set($event)"
+                (why)="why($event)"
+                (details)="drawerFor.set($event); selected.set($event)"
+                (action)="serviceAction($event)"
+              />
+            }
+            @case ('graph') {
+              <dd-graph (details)="drawerFor.set($event); selected.set($event)" (logs)="selected.set($event)" (action)="serviceAction($event)" />
+            }
+            @case ('ports') { <dd-ports [initialFilter]="portFilter()" /> }
+            @case ('tests') { <dd-tests /> }
+            @case ('diagnosis') { <dd-diagnosis [only]="diagnosisFor()" (showAll)="diagnosisFor.set(null)" /> }
+            @case ('timeline') { <dd-timeline /> }
+            @case ('connections') { <dd-connections /> }
+            @case ('data') { <dd-data class="fill" (show)="showDoc($event)" (toast)="toast($event)" /> }
+            @case ('mail') { <dd-mail class="fill" (show)="showDoc($event)" (toast)="toast($event)" /> }
+            @case ('api') { <dd-api class="fill" (show)="showDoc($event)" (toast)="toast($event)" (logs)="selected.set($event); logsOpen.set(true)" /> }
           }
-        </button>
-        <button class="tab" [class.on]="tab() === 'timeline'" (click)="tab.set('timeline')">Timeline</button>
-        <button class="tab" [class.on]="tab() === 'connections'" (click)="tab.set('connections')">Connections</button>
-      </nav>
-      <section class="content">
-        @if (tab() === 'services') {
-          <dd-services [selected]="selected()" (select)="selected.set($event)" (why)="why($event)" />
-        } @else if (tab() === 'diagnosis') {
-          <dd-diagnosis [only]="diagnosisFor()" (showAll)="diagnosisFor.set(null)" />
-        } @else if (tab() === 'timeline') {
-          <dd-timeline />
-        } @else {
-          <dd-connections />
+        </section>
+        @if (drawerFor(); as name) {
+          <dd-drawer
+            class="drawer"
+            [service]="name"
+            (close)="drawerFor.set(null)"
+            (pick)="drawerFor.set($event); selected.set($event)"
+            (action)="serviceAction($event)"
+            (data)="openData($event)"
+            (shell)="shellFor.set($event)"
+          />
         }
-      </section>
-      <dd-logs class="logs" [service]="selected()" (serviceChange)="selected.set($event)" />
+      </div>
+      @if (logsOpen()) {
+        <div class="resizer" title="Drag to resize · Ctrl+J hides the logs" (pointerdown)="startResize($event)" (dblclick)="toggleLogs()">
+          <span class="grip"></span>
+        </div>
+        <dd-logs class="logs" [style.flex-basis.px]="logsHeight()" [service]="selected()" (serviceChange)="selected.set($event)" (openRequest)="openSent($event)" (searchHistory)="logSearch.set(true)" />
+      }
     } @else {
       <div class="empty">
         @if (engine.status() === 'disconnected' && engine.error()) {
@@ -85,14 +184,25 @@
           <button class="primary" (click)="engine.start()">Try again</button>
         } @else {
           <h2>Open a project</h2>
-          <p>Choose a folder that contains a <span class="mono">devdesk.yaml</span>. DevDesk shows every command before it runs anything.</p>
+          <p>Choose your project's folder. If it has no <span class="mono">devdesk.yaml</span> yet, DevDesk drafts one from what's there (docker-compose.yml, package.json…). It shows every command before it runs anything.</p>
           <button class="primary" (click)="pickFolder()">Add project folder</button>
+          @if (projects().length) {
+            <div class="recent">
+              @for (r of projects(); track r) {
+                <button class="ghost" (click)="open(r)"><dd-icon name="folder" [size]="14" /> {{ base(r) }} <span class="dim mono">{{ short(r) }}</span></button>
+              }
+            </div>
+          }
         }
         @if (openError(); as e) {
           <div class="open-error">
             <div>{{ e.error }}</div>
             @for (pr of e.problems ?? []; track $index) {
               <div class="mono problem">{{ pr.line }}:{{ pr.column }} {{ pr.path }} {{ pr.message }}</div>
+            }
+            @if (needsSetup()) {
+              <p>This looks like a fresh copy of the project: its settings file doesn't exist yet.</p>
+              <button class="primary" (click)="freshSetup()"><dd-icon name="download" [size]="13" /> Set up this project</button>
             }
           </div>
         }
@@ -103,16 +213,88 @@
   <footer class="statusbar mono">
     <span class="item"><dd-dot [label]="engine.status() === 'connected' ? 'healthy' : engine.status() === 'connecting' ? 'starting' : 'crashed'" /> engine {{ engine.status() }}</span>
     @if (engine.project()) {
+      <button class="item link" (click)="setPage('services')" title="Services"><dd-dot [label]="summaryLabel()" /> {{ runningCount() }}/{{ services().length }} running</button>
+      @if (findingCount() > 0) {
+        <button class="item link warn-text" (click)="setPage('diagnosis')">▲ {{ findingCount() }} problem{{ findingCount() === 1 ? '' : 's' }}</button>
+      }
+      @if (engine.warnings().length > 0) {
+        <span class="item warn-text clip" [title]="engine.warnings().join('\n')">! {{ engine.warnings().length }} warning{{ engine.warnings().length === 1 ? '' : 's' }}: {{ engine.warnings()[engine.warnings().length - 1] }}</span>
+      }
       <span class="item">CPU {{ cpu(totals().cpu) }}</span>
       <span class="item">RAM {{ bytes(totals().memory) }}</span>
-      <span class="item">{{ ports() }} declared ports</span>
-      <span class="item grow">{{ short(engine.project()!.file) }}</span>
-    }
-    @if (engine.warnings().length > 0) {
-      <span class="item warn-text" [title]="engine.warnings().join('\n')">! {{ engine.warnings()[engine.warnings().length - 1] }}</span>
+      <span class="item grow"></span>
+      <button class="item link" (click)="toggleLogs()" [class.on]="logsOpen()" title="Show or hide the logs (Ctrl+J)">logs <kbd>Ctrl J</kbd></button>
+      <span class="item"><kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd> pages</span>
     }
   </footer>
 </div>
+
+<div class="toasts">
+  @for (t of toasts(); track t.id) {
+    <div class="toast {{ t.kind }}" [class.actionable]="!!t.why">
+      {{ t.text }}
+      @if (t.why) { <button class="sm" (click)="why(t.why); dismissToast(t.id)">Why?</button> }
+    </div>
+  }
+</div>
+
+@if (setupFor(); as folder) {
+  <dd-setup-wizard [path]="folder" (done)="setupDone($event)" (cancel)="setupFor.set(null)" />
+}
+
+<!-- Opening another project failed while one is open: the empty screen that shows errors isn't visible then. -->
+@if (openError() && engine.project(); as p) {
+  <div class="scrim" (click)="openError.set(null)">
+    <div class="modal" role="dialog" aria-label="Could not open the project" (click)="$event.stopPropagation()">
+      <h3>Could not open {{ base(failedPath()) }}</h3>
+      <p>{{ openError()!.error }}</p>
+      @for (pr of openError()!.problems ?? []; track $index) {
+        <div class="mono problem">{{ pr.line }}:{{ pr.column }} {{ pr.path }} {{ pr.message }}</div>
+      }
+      @if (needsSetup()) {
+        <p>This looks like a fresh copy of the project: its settings file doesn't exist yet.</p>
+      }
+      <div class="modal-actions">
+        <button class="ghost" (click)="openError.set(null)">Close</button>
+        @if (needsSetup()) {
+          <button class="primary" (click)="freshSetup(failedPath()); openError.set(null)"><dd-icon name="download" [size]="13" /> Set up this project</button>
+        }
+      </div>
+    </div>
+  </div>
+}
+
+@if (logSearch()) {
+  <dd-log-search (close)="logSearch.set(false)" />
+}
+
+@if (shellFor(); as name) {
+  <dd-shell [service]="name" (close)="shellFor.set(null)" />
+}
+
+@if (remoteOpen()) {
+  <dd-remote (close)="remoteOpen.set(false)" />
+}
+
+@if (snapshotsOpen()) {
+  <dd-snapshots (close)="snapshotsOpen.set(false)" />
+}
+
+@if (envOpen()) {
+  <dd-env-editor (close)="envOpen.set(false)" />
+}
+
+@if (freshFor(); as folder) {
+  <dd-fresh-setup [path]="folder" (done)="freshDone($event)" (cancel)="freshFor.set(null)" />
+}
+
+@if (switching() !== null) {
+  <dd-project-switch [projects]="projects()" [summary]="summaryLabel()" [ask]="switching() || null"
+                     (opened)="open($event.path, $event.stopCurrent)" (forget)="forgetProject($event)" (close)="switching.set(null)" />
+}
+@if (paletteOpen()) {
+  <dd-palette (pick)="runCommand($event)" (close)="paletteOpen.set(false)" />
+}
 
 @if (trustOpen() && engine.project(); as p) {
   <div class="scrim" (click)="trustOpen.set(false)">
@@ -130,4 +312,6 @@
       </div>
     </div>
   </div>
+}
+
 }

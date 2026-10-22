@@ -1,0 +1,401 @@
+<div class="scrim">
+  <div class="wizard" role="dialog" aria-label="Set up this project">
+    <header class="head">
+      <div class="title">
+        <h3>{{ editing() ? 'Edit setup' : 'Set up this project' }}</h3>
+        <span class="mono dim small path">{{ scan()?.path ?? path() }}</span>
+      </div>
+      <ol class="steps">
+        @for (s of steps; track s; let i = $index) {
+          <li>
+            <button class="ghost sm" [class.on]="step() === i" [class.past]="i < step()" (click)="go(i)" [disabled]="busy() || !scan() || (i > step() && !canContinue())">
+              <span class="num mono">{{ i + 1 }}</span> {{ s }}
+            </button>
+          </li>
+        }
+      </ol>
+    </header>
+
+    <div class="body" #body>
+      @if (!scan()) {
+        <div class="center">
+          @if (error(); as e) {
+            <p class="err-text">{{ e }}</p>
+          } @else {
+            <p class="dim">Looking at the folder…</p>
+          }
+        </div>
+      } @else {
+        @switch (step()) {
+          <!-- 1. Scan -->
+          @case (0) {
+            <section>
+              <label class="field">
+                <span>Project name</span>
+                <input class="mono" [value]="draft().name" (input)="setName($any($event.target).value)" />
+              </label>
+              <h4>What DevDesk found</h4>
+              <ul class="found mono">
+                @for (f of scan()!.found; track $index) {
+                  <li><dd-icon name="check" [size]="12" /> {{ f }}</li>
+                } @empty {
+                  <li class="dim">No compose file, build file or .env here.</li>
+                }
+              </ul>
+              @for (n of draft().notes; track $index) {
+                <p class="note">{{ n }}</p>
+              }
+              <p class="dim">
+                {{ draft().services.length }} service{{ draft().services.length === 1 ? '' : 's' }} drafted. Nothing is saved
+                or started until the last steps. Next: check each one.
+              </p>
+              <h4>This machine</h4>
+              @if (doctor(); as d) {
+                @if (d.skipped) {
+                  <p class="dim small">Not checked yet: {{ d.skipped }}.</p>
+                }
+                @for (f of d.problems; track $index) {
+                  <div class="doc-problem" [class.warn]="f.severity === 'warning'">
+                    <div><span class="sev">{{ f.severity === 'error' ? '✕' : '!' }}</span> {{ f.title }} @if (f.service) { <span class="mono dim small">{{ f.service }}</span> }</div>
+                    @if (f.actions.length) { <div class="mono small fix">→ {{ f.actions[0] }}</div> }
+                  </div>
+                }
+                @if (d.passed.length) {
+                  <button class="ghost sm" (click)="showPassed.set(!showPassed())">✓ {{ d.passed.length }} check{{ d.passed.length === 1 ? '' : 's' }} fine {{ showPassed() ? '▴' : '▾' }}</button>
+                  @if (showPassed()) {
+                    @for (p of d.passed; track $index) { <div class="small dim passed">✓ {{ p }}</div> }
+                  }
+                }
+                @if (!d.problems.length && !d.skipped) { <p class="ok-text small">This machine has what the project needs.</p> }
+              } @else {
+                <p class="dim small">Checking versions, Docker, packages, ports and disk…</p>
+              }
+              @if (suggestions().length) {
+                <h4>Also running on this machine</h4>
+                @for (s of suggestions(); track s.name) {
+                  <div class="suggestion">
+                    <div>
+                      <div><span class="mono">{{ s.image }}</span> <span class="dim">· {{ s.origin }}</span></div>
+                      <div class="dim small">{{ s.notes[0] }}</div>
+                    </div>
+                    <button class="sm" (click)="takeSuggestion(s)"><dd-icon name="plus" [size]="12" /> Add as "{{ s.name }}"</button>
+                  </div>
+                }
+              }
+            </section>
+          }
+
+          <!-- 2. Services -->
+          @case (1) {
+            <section>
+              <div class="toolbar">
+                <button class="sm" (click)="addBlank()"><dd-icon name="plus" [size]="12" /> Add service</button>
+                <div class="menu-anchor">
+                  <button class="sm" (click)="dbMenu.set(!dbMenu())"><dd-icon name="database" [size]="12" /> Add database <dd-icon name="chevronDown" [size]="11" /></button>
+                  @if (dbMenu()) {
+                    <div class="dropdown">
+                      @for (k of scan()!.databaseKinds; track k) {
+                        <button class="ghost sm wide" (click)="addDatabase(k)" [class.on]="scan()!.cloud?.suggestion === k">{{ kindLabel(k) }}@if (scan()!.cloud?.suggestion === k) { <span class="dim"> · suggested</span> }</button>
+                      }
+                    </div>
+                  }
+                </div>
+                <span class="dim small">A database gets a free port and a new password. The Data page opens it with no extra setup.</span>
+              </div>
+
+              @for (s of draft().services; track $index; let i = $index) {
+                <div class="card" [class.bad]="cardProblems()[i].length">
+                  <div class="card-head">
+                    <input class="mono name" [value]="s.name" (input)="patch(i, { name: $any($event.target).value })" aria-label="Service name" />
+                    <div class="segmented">
+                      <button [class.on]="s.kind === 'command'" (click)="setKind(i, 'command')">command</button>
+                      <button [class.on]="s.kind === 'container'" (click)="setKind(i, 'container')">container</button>
+                    </div>
+                    <span class="origin small dim">{{ s.origin }}</span>
+                    <button class="ghost icon sm" title="Remove this service" (click)="remove(i)"><dd-icon name="trash" [size]="13" /></button>
+                  </div>
+
+                  <div class="grid">
+                    @if (s.kind === 'command') {
+                      <label class="field wide">
+                        <span>Start command</span>
+                        <input class="mono" [value]="s.command" placeholder="npm run dev" (input)="patch(i, { command: $any($event.target).value })" />
+                      </label>
+                      <label class="field">
+                        <span>Folder</span>
+                        <input class="mono" [value]="s.directory" placeholder="(the project folder)" (input)="patch(i, { directory: $any($event.target).value })" />
+                      </label>
+                      <label class="field">
+                        <span>Ports</span>
+                        <input class="mono" [value]="s.ports.join(', ')" placeholder="3000" (change)="patch(i, { ports: list($any($event.target).value) })" />
+                      </label>
+                    } @else {
+                      <label class="field">
+                        <span>Image</span>
+                        <input class="mono" [value]="s.image" placeholder="postgres:18" (input)="patch(i, { image: $any($event.target).value })" />
+                      </label>
+                      <label class="field">
+                        <span>Ports (host:container)</span>
+                        <input class="mono" [value]="s.ports.join(', ')" placeholder="5432:5432" (change)="patch(i, { ports: list($any($event.target).value) })" />
+                      </label>
+                      <label class="field">
+                        <span>Volumes</span>
+                        <input class="mono" [value]="s.volumes.join(', ')" placeholder="data:/var/lib/postgresql" (change)="patch(i, { volumes: list($any($event.target).value) })" />
+                      </label>
+                      <label class="field wide">
+                        <span>Command (optional, replaces the image's own)</span>
+                        <input class="mono" [value]="s.command" (input)="patch(i, { command: $any($event.target).value })" />
+                      </label>
+                    }
+                    <label class="field">
+                      <span>Ready when</span>
+                      <select [value]="s.health.type" (change)="patch(i, { health: { ...s.health, type: $any($event.target).value } })">
+                        <option value="process">it's running</option>
+                        <option value="tcp">a port accepts connections</option>
+                        <option value="http">a URL answers</option>
+                        <option value="command">a command succeeds</option>
+                        @if (s.kind === 'container') {
+                          <option value="docker">the image's own check</option>
+                        }
+                      </select>
+                    </label>
+                    @if (['tcp', 'http', 'command'].includes(s.health.type)) {
+                      <label class="field wide">
+                        <span>Check</span>
+                        <input class="mono" [value]="s.health.target" [placeholder]="healthHint(s.health.type)" (input)="patch(i, { health: { ...s.health, target: $any($event.target).value } })" />
+                      </label>
+                    }
+                    <label class="field">
+                      <span>If it stops</span>
+                      <select [value]="s.restart" (change)="patch(i, { restart: $any($event.target).value })">
+                        <option value="no">leave it stopped</option>
+                        <option value="on-failure">restart if it crashes</option>
+                        <option value="always">always restart</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div class="env">
+                    <div class="env-head small dim">Environment</div>
+                    @for (row of envRows(s); track row[0]) {
+                      <div class="env-row">
+                        <input class="mono key" [value]="row[0]" (change)="setEnv(i, row[0], $any($event.target).value, row[1])" aria-label="Variable name" />
+                        <input class="mono" [type]="isSecret(row[0]) && !shown(s.name + '.' + row[0]) ? 'password' : 'text'" [value]="row[1]" (change)="setEnv(i, row[0], row[0], $any($event.target).value)" aria-label="Value" />
+                        @if (isSecret(row[0])) {
+                          <button class="ghost icon sm" [title]="shown(s.name + '.' + row[0]) ? 'Hide' : 'Show'" (click)="toggleShown(s.name + '.' + row[0])"><dd-icon [name]="shown(s.name + '.' + row[0]) ? 'eyeOff' : 'eye'" [size]="13" /></button>
+                        }
+                        <button class="ghost icon sm" title="Remove" (click)="removeEnv(i, row[0])"><dd-icon name="close" [size]="12" /></button>
+                      </div>
+                    }
+                    <button class="ghost sm" (click)="addEnv(i)"><dd-icon name="plus" [size]="12" /> Variable</button>
+                  </div>
+
+                  @for (n of s.notes; track $index) {
+                    <p class="note small">{{ n }}</p>
+                  }
+                  @for (p of cardProblems()[i]; track $index) {
+                    <p class="problem small">{{ p }}</p>
+                  }
+                </div>
+              } @empty {
+                <p class="dim">No services yet: add one, or a database.</p>
+              }
+            </section>
+          }
+
+          <!-- 3. Dependencies -->
+          @case (2) {
+            <section class="deps-step">
+              <div class="deps-top">
+                <p class="dim">What does each service need before it can start? DevDesk starts those first and waits for them.</p>
+                <div class="segmented" role="radiogroup" aria-label="View">
+                  <button [class.on]="depsView() === 'canvas'" (click)="depsView.set('canvas')">Canvas</button>
+                  <button [class.on]="depsView() === 'list'" (click)="depsView.set('list')">List</button>
+                </div>
+              </div>
+              @if (depsView() === 'canvas') {
+                <dd-setup-canvas [services]="draft().services" (needs)="setNeeds($event.service, $event.dependsOn)" />
+              } @else {
+              @for (s of draft().services; track s.name; let i = $index) {
+                <div class="deps">
+                  <div class="mono dep-name">{{ s.name }} <span class="dim">needs</span></div>
+                  <div class="dep-list">
+                    @for (o of names(); track o) {
+                      @if (o !== s.name) {
+                        <span class="dep" [class.on]="needs(s, o)">
+                          <label><input type="checkbox" [checked]="needs(s, o)" (change)="toggleNeed(i, o)" /> <span class="mono">{{ o }}</span></label>
+                          @if (needs(s, o)) {
+                            <select class="small" [value]="s.dependsOn[o]" (change)="setCondition(i, o, $any($event.target).value)">
+                              <option value="started">started</option>
+                              <option value="healthy">ready (healthy)</option>
+                              <option value="completed_successfully">finished OK</option>
+                            </select>
+                          }
+                        </span>
+                      }
+                    }
+                    @if (names().length < 2) {
+                      <span class="dim small">nothing else to need</span>
+                    }
+                  </div>
+                </div>
+              }
+              }
+            </section>
+          }
+
+          <!-- 4. Settings -->
+          @case (3) {
+            <section>
+              @if (preview(); as p) {
+                <p class="dim">
+                  Env files every service gets:
+                  @for (f of draft().envFiles; track f) {
+                    <span class="mono chip">{{ f }}</span>
+                  } @empty {
+                    <span>none</span>
+                  }
+                </p>
+                @for (w of p.env.warnings; track $index) {
+                  <p class="note">{{ w }}</p>
+                }
+                @if (p.env.missing.length) {
+                  <h4>Missing</h4>
+                  @for (m of p.env.missing; track m.key) {
+                    <div class="missing">
+                      <div>
+                        <span class="mono">{{ m.key }}</span>
+                        <div class="dim small">{{ m.reason }}</div>
+                      </div>
+                      <input class="mono" [type]="isSecret(m.key) ? 'password' : 'text'" placeholder="value" [value]="newValues()[m.key] ?? ''" (input)="setNewValue(m.key, $any($event.target).value)" />
+                      <button class="sm" (click)="saveVariable(m.key)">Add to {{ draft().envFiles[0] ?? '.env' }}</button>
+                    </div>
+                  }
+                }
+                <h4>Variables</h4>
+                <table class="vars">
+                  <thead><tr><th>name</th><th>value</th><th>file</th><th>used by</th></tr></thead>
+                  <tbody>
+                    @for (v of p.env.variables; track v.file + v.key) {
+                      <tr>
+                        <td class="mono">{{ v.key }}</td>
+                        <td class="mono">{{ v.secret ? '●●●●●●' : v.value }}</td>
+                        <td class="mono dim">{{ v.file }}</td>
+                        <td class="dim">{{ v.usedBy.join(', ') || '–' }}</td>
+                      </tr>
+                    } @empty {
+                      <tr><td colspan="4" class="dim">No env file. Variables can also go on each service (step 2).</td></tr>
+                    }
+                  </tbody>
+                </table>
+                <p class="dim small">Secret-looking values stay hidden: the engine never sends them to the app.</p>
+              } @else {
+                <p class="dim">Checking…</p>
+              }
+            </section>
+          }
+
+          <!-- 5. Test run -->
+          @case (4) {
+            <section>
+              @if (preview(); as p) {
+                @if (p.problems.length) {
+                  <h4>Fix these first</h4>
+                  @for (pr of p.problems; track $index) {
+                    <p class="problem mono small">{{ pr.error ?? (pr.path + ': ' + pr.message) }}</p>
+                  }
+                } @else {
+                  @if (doctor(); as d) {
+                    @if (d.problems.length) {
+                      <h4>This machine first</h4>
+                      @for (f of d.problems; track $index) {
+                        <div class="doc-problem" [class.warn]="f.severity === 'warning'">
+                          <div><span class="sev">{{ f.severity === 'error' ? '✕' : '!' }}</span> {{ f.title }}</div>
+                          @if (f.actions.length) { <div class="mono small fix">→ {{ f.actions[0] }}</div> }
+                        </div>
+                      }
+                      <p class="dim small">
+                        @if (hasDoctorErrors()) { The test will probably fail until the ✕ ones are fixed. } @else { Only warnings: the test can go ahead. }
+                        <button class="ghost sm" (click)="runDoctor()">Check again</button>
+                      </p>
+                    }
+                  }
+                  <p class="dim">The test run starts everything with this setup, without saving anything. These commands and images will run:</p>
+                  <pre class="commands">@for (c of p.commands; track $index) {{{ c }}
+}</pre>
+                  <div class="toolbar">
+                    @if (engine.running() && tested()) {
+                      <button class="danger" [class.busy]="busy()" (click)="stopTest()"><dd-icon name="stop" [size]="12" /> Stop the test</button>
+                    } @else {
+                      <button class="primary" [class.busy]="busy()" [disabled]="busy()" (click)="runTest()"><dd-icon name="play" [size]="12" /> {{ tested() ? 'Run the test again' : 'Run the test' }}</button>
+                    }
+                    @switch (testOutcome()) {
+                      @case ('ok') { <span class="ok-text">Everything started. You can save it.</span> }
+                      @case ('failed') { <span class="err-text">Something didn't start: the reason is next to it.</span> }
+                      @case ('running') { <span class="dim">Starting…</span> }
+                    }
+                  </div>
+                  @for (r of testRows(); track r.name) {
+                    <div class="test-row" [class.bad]="r.finding || ['failed', 'crashed', 'blocked', 'unhealthy'].includes(r.label)">
+                      <dd-dot [label]="r.label" />
+                      <span class="mono tname">{{ r.name }}</span>
+                      <span class="small">{{ r.label }}</span>
+                      <span class="dim small grow">{{ r.detail }}</span>
+                      @if (r.finding; as f) {
+                        <div class="why">
+                          <div>{{ f.title }}</div>
+                          <div class="dim small">{{ f.explanation }}</div>
+                          @for (a of f.actions; track $index) {
+                            <div class="mono small">→ {{ a }}</div>
+                          }
+                        </div>
+                      }
+                    </div>
+                  }
+                  <p class="dim small">You can skip the test. Go back to change something, then run it again.</p>
+                }
+              }
+            </section>
+          }
+
+          <!-- 6. Done -->
+          @case (5) {
+            <section>
+              @if (preview(); as p) {
+                <p class="dim">
+                  This is the <span class="mono">devdesk.yaml</span> DevDesk will {{ editing() ? 'save over the current one' : 'write' }}
+                  in the project folder. Commit it to git so your team gets the same setup.
+                </p>
+                @for (n of draft().notes; track $index) {
+                  <p class="note small">{{ n }}</p>
+                }
+                @for (pr of p.problems; track $index) {
+                  <p class="problem mono small">{{ pr.error ?? (pr.path + ': ' + pr.message) }}</p>
+                }
+                <pre class="commands yaml">{{ p.yaml }}</pre>
+              }
+            </section>
+          }
+        }
+      }
+      @if (scan() && error()) {
+        <p class="problem">{{ error() }}</p>
+      }
+    </div>
+
+    <footer class="foot">
+      <button class="ghost" [disabled]="busy()" (click)="close()">Cancel</button>
+      <span class="grow"></span>
+      @if (step() > 0) {
+        <button [disabled]="busy()" (click)="go(step() - 1)">Back</button>
+      }
+      @if (step() < steps.length - 1) {
+        <button class="primary" [disabled]="!canContinue()" (click)="go(step() + 1)">Next: {{ steps[step() + 1] }}</button>
+      } @else {
+        <button class="primary" [class.busy]="busy()" [disabled]="busy() || !!preview()?.problems?.length" (click)="write()">
+          <dd-icon name="save" [size]="13" /> {{ editing() ? 'Save devdesk.yaml' : 'Write devdesk.yaml and open' }}
+        </button>
+      }
+    </footer>
+  </div>
+</div>

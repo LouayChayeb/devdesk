@@ -29,6 +29,7 @@ export function tone(label: string): Tone {
 
 export function bytes(n: number | null | undefined): string {
   if (n == null) return '–';
+  if (n < 1024) return `${Math.round(n)} B`; // keys and mails are often tiny: "464 B", not "0K"
   if (n < 1024 * 1024) return `${Math.round(n / 1024)}K`;
   if (n < 1024 * 1024 * 1024) return `${Math.round(n / 1024 / 1024)}M`;
   return `${(n / 1024 / 1024 / 1024).toFixed(1)}G`;
