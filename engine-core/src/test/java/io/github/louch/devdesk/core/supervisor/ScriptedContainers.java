@@ -17,7 +17,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
-/** A fake ContainerRuntime: image "missing/image" can't be pulled; every other container runs until stopped. */
+/**
+ * A fake ContainerRuntime: image "missing/image" can't be pulled, "crashing/image" exits with 1 right away; every other
+ * container runs until stopped.
+ */
 final class ScriptedContainers implements ContainerRuntime {
 
     final List<String> started = new CopyOnWriteArrayList<>();
@@ -42,6 +45,9 @@ final class ScriptedContainers implements ContainerRuntime {
                 "devdesk-" + spec.project() + "-" + spec.service(),
                 5000 + started.size());
         exits.put(c, new CompletableFuture<>());
+        if (spec.container().image().equals("crashing/image")) {
+            exits.get(c).complete(ExitStatus.of(1));
+        }
         return c;
     }
 

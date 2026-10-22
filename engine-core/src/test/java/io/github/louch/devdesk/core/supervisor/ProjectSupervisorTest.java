@@ -404,6 +404,21 @@ class ProjectSupervisorTest {
     }
 
     @Test
+    void aCrashedContainerIsRemovedNotLeftBehind() throws Exception {
+        supervisor("""
+                version: 1
+                services:
+                  db: { container: { image: crashing/image } }
+                """).up().get(10, TimeUnit.SECONDS);
+
+        // Removed in the background right after the exit: wait for it, briefly.
+        for (int i = 0; i < 100 && containers.stopped.isEmpty(); i++) {
+            Thread.sleep(20);
+        }
+        assertThat(containers.stopped).containsExactly("db");
+    }
+
+    @Test
     void unexpectedAdapterErrorFailsTheServiceInsteadOfHanging() throws Exception {
         var s = supervisor("""
                 version: 1

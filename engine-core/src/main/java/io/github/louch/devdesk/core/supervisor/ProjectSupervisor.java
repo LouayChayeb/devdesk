@@ -647,8 +647,35 @@ public final class ProjectSupervisor implements AutoCloseable {
                 || s.state instanceof ServiceState.Starting) {
             return; // an older run of this service, or already handled
         }
+        // Exiting while being stopped: the stop itself removes the container.
+        boolean byItself = !(s.state instanceof ServiceState.Stopping);
         remember(s.exits, exit, HISTORY_ENTRIES);
         apply(s, new ServiceEvent.Exited(exit), exit.explanation());
+        if (byItself && handle instanceof Handle.Container c) {
+            removeExited(s, c);
+        }
+    }
+
+    /**
+     * A container that exited by itself still exists in Docker until removed. Its output is already in DevDesk's logs,
+     * so it's removed now: nothing DevDesk started outlives it, even a dead container. Off the actor, because it's a
+     * Docker call.
+     */
+    private void removeExited(Service s, Handle.Container c) {
+        Thread.ofVirtual().name("remove-" + s.spec.name()).start(() -> {
+            try {
+                if (containers.stop(c.container(), Duration.ZERO) instanceof StopResult.LeftBehind) {
+                    onActor(() -> listener.accept(new ProjectEvent.Warning(
+                            s.spec.name(),
+                            "its exited container " + c.container().name() + " could not be removed")));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException e) {
+                onActor(() -> listener.accept(new ProjectEvent.Warning(
+                        s.spec.name(), "its exited container could not be removed: " + e.getMessage())));
+            }
+        });
     }
 
     private Map<String, String> environment(Service s) {

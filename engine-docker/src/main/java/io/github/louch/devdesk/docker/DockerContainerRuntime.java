@@ -232,7 +232,11 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                             + "so DevDesk won't touch it. Rename or remove it yourself: docker rm -f " + name,
                     null);
         }
-        docker.removeContainerCmd(existing.getId()).withForce(true).exec();
+        try {
+            docker.removeContainerCmd(existing.getId()).withForce(true).exec();
+        } catch (NotFoundException e) {
+            // removed meanwhile (the cleanup after its previous run exited): fine
+        }
     }
 
     private static Ports portBindings(Workload.Container c) {
