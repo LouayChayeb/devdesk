@@ -234,7 +234,9 @@
         @if (st.view() === 'body' && !r.binary) {
           <button class="ghost sm" [class.on]="st.pretty()" (click)="st.pretty.set(!st.pretty())">Pretty</button>
           <button class="ghost icon sm" title="Copy the body" (click)="copy(r.body)"><dd-icon name="copy" [size]="12" /></button>
-          <button class="ghost sm" title="Make the mock server answer this request with this answer" (click)="mockThis()"><dd-icon name="box" [size]="12" /> Mock this</button>
+          @if (engine.extras()) {
+            <button class="ghost sm" title="Make the mock server answer this request with this answer" (click)="mockThis()"><dd-icon name="box" [size]="12" /> Mock this</button>
+          }
         }
       </div>
       @if (r.checks.length || r.captured.length) {

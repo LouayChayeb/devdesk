@@ -291,6 +291,13 @@ export class App {
     window.addEventListener('pointerup', up);
   }
 
+  /** Extras are registered by the engine at start, so the switch applies after DevDesk restarts. */
+  async toggleExtras(): Promise<void> {
+    const r = await this.engine.setExtras(!this.engine.settings().extrasSaved);
+    if (!r.ok) this.toast(r.error, 'err');
+    else this.toast(`Extras ${r.value.extrasSaved ? 'on' : 'off'} from the next start: restart DevDesk to apply`);
+  }
+
   toast(text: string, kind: 'info' | 'err' = 'info', why?: string): void {
     const id = ++this.toastId;
     this.toasts.update((t) => [...t.slice(-3), { id, text, kind, why }]);

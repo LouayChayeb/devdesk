@@ -786,6 +786,9 @@ export class Engine {
   readonly status = signal<'connecting' | 'connected' | 'disconnected'>('connecting');
   readonly error = signal<string | null>(null);
   readonly project = signal<ProjectView | null>(null);
+  /** The extras switch as the engine started with it, and what the next start will use (see Extras in the engine). */
+  readonly settings = signal<Settings>({ extras: false, extrasSaved: false, extrasFromEnvironment: false });
+  readonly extras = computed(() => this.settings().extras);
   readonly lines = signal<LogLine[]>([]);
   readonly findings = signal<Record<string, Finding[]>>({});
   readonly preflight = signal<Finding[] | null>(null);
@@ -844,6 +847,7 @@ export class Engine {
       this.status.set('connected');
       this.error.set(null);
       this.retryMs = 500;
+      void this.loadSettings();
     };
     ws.onmessage = (m) => this.apply(JSON.parse(m.data));
     ws.onclose = () => {
@@ -1064,6 +1068,16 @@ export class Engine {
   /** What changed since the project last started cleanly (config, .env keys, lock files, images, tools, git). */
   changes(): Promise<DataAnswer<{ known: boolean; message?: string; since?: string; changes?: { area: string; what: string; detail: string }[] }>> {
     return this.data('GET', '/project/changes', undefined, (b) => b);
+  }
+  private async loadSettings(): Promise<void> {
+    const r = await this.data('GET', '/settings', undefined, (b) => b as Settings);
+    if (r.ok) this.settings.set(r.value);
+  }
+  /** Saves the extras switch for the next start of DevDesk (routes are registered once, at start). */
+  async setExtras(on: boolean): Promise<DataAnswer<Settings>> {
+    const r = await this.data('POST', '/settings/extras', { on }, (b) => b as Settings);
+    if (r.ok) this.settings.set(r.value);
+    return r;
   }
   /** The same changes ranked against what fails now: proven / likely / unknown, with why, a caveat and next steps. */
   verdict(): Promise<DataAnswer<Verdict>> {
@@ -1533,4 +1547,11 @@ export interface Verdict {
   since?: string;
   failing?: boolean;
   items?: Suspect[];
+}
+
+/** App settings from the engine. */
+export interface Settings {
+  extras: boolean;
+  extrasSaved: boolean;
+  extrasFromEnvironment: boolean;
 }

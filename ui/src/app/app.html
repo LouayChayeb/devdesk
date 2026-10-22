@@ -47,10 +47,16 @@
           @if (engine.project()) {
             <button class="ghost wide" (click)="editSetup()"><dd-icon name="edit" [size]="14" /> Edit setup</button>
             <button class="ghost wide" (click)="projectMenu.set(false); envOpen.set(true)"><dd-icon name="key" [size]="14" /> Environment (.env files)</button>
-            <button class="ghost wide" (click)="projectMenu.set(false); remoteOpen.set(true)" title="Deploy it to a server, or run it on a stronger machine as a dev box"><dd-icon name="upload" [size]="14" /> Run on another machine…</button>
+            @if (engine.extras()) {
+              <button class="ghost wide" (click)="projectMenu.set(false); remoteOpen.set(true)" title="Deploy it to a server, or run it on a stronger machine as a dev box"><dd-icon name="upload" [size]="14" /> Run on another machine…</button>
+            }
             <button class="ghost wide" (click)="projectMenu.set(false); snapshotsOpen.set(true)"><dd-icon name="archive" [size]="14" /> Snapshots (save / restore data)</button>
             <button class="ghost wide" (click)="freshSetup()" title="For a fresh clone: .env, packages, images, one-time jobs"><dd-icon name="download" [size]="14" /> Set up (install everything)</button>
           }
+          <div class="menu-sep"></div>
+          <button class="ghost wide" (click)="toggleExtras()" [disabled]="engine.settings().extrasFromEnvironment" [title]="engine.settings().extrasFromEnvironment ? 'Set by DEVDESK_EXTRAS in the environment' : 'Mock server, traffic recorder, stress lab, Kafka / SQS / S3 / Elasticsearch / RabbitMQ pages, running on another machine, auto-sleep. Applies after a restart.'">
+            <dd-icon name="box" [size]="14" /> Extras: {{ engine.settings().extrasSaved || engine.settings().extras ? 'on' : 'off' }}{{ engine.settings().extrasSaved !== engine.extras() && !engine.settings().extrasFromEnvironment ? ' (after restart)' : '' }}
+          </button>
           <input
             class="mono"
             placeholder="or type a path and press Enter…"
@@ -272,7 +278,7 @@
   <dd-shell [service]="name" (close)="shellFor.set(null)" />
 }
 
-@if (remoteOpen()) {
+@if (remoteOpen() && engine.extras()) {
   <dd-remote (close)="remoteOpen.set(false)" />
 }
 

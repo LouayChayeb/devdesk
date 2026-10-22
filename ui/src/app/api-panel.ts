@@ -87,9 +87,11 @@ type Variable = HttpOverview['variables'][number];
           }
           <button class="ghost sm" (click)="clearCookies()" title="Forget every cookie: the next request starts logged out">Clear cookies</button>
         }
+        @if (engine.extras()) {
         <button class="ghost sm vars" (click)="show.emit(wb.open({ kind: 'mock' }))" title="Fake endpoints on a port of this machine"><dd-icon name="box" [size]="12" /> Mock server</button>
         <button class="ghost sm vars" (click)="show.emit(wb.open({ kind: 'stress' }))" title="Heavy fake traffic on this machine: which service gives up first"><dd-icon name="pulse" [size]="12" /> Stress lab</button>
         <button class="ghost sm vars" (click)="show.emit(wb.open({ kind: 'recorder' }))" title="Record the real calls to a service, then replay them"><dd-icon name="radio" [size]="12" /> Traffic recorder</button>
+        }
         <button class="ghost sm vars" (click)="openVars()">{{ braces }} Variables <span class="dim mono">{{ requests.variables().length }}</span></button>
       </div>
     </aside>

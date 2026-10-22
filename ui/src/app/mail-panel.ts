@@ -32,6 +32,7 @@ import { StatusDot } from './status-dot';
           </div>
         }
       }
+      @if (engine.extras()) {
       <div class="label queues-label">Queues</div>
       @for (b of brokers(); track b.service) {
         <button class="item" [class.on]="isQueues(b.service)" (click)="openQueues(b.service)" [title]="b.kind + ' · ' + b.service">
@@ -44,6 +45,7 @@ import { StatusDot } from './status-dot';
         @if (loaded()) {
           <div class="help dim">No RabbitMQ (a "-management" image with port 15672), Kafka or local SQS in this project.</div>
         }
+      }
       }
     </aside>
     <section class="main">
