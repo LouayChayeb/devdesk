@@ -1205,7 +1205,17 @@ final class EngineSession implements AutoCloseable {
                 recorder.ifPresent(r -> r.sessionEnded("desktop app closed"));
                 lock.ifPresent(ProjectLock::close);
             } catch (Exception e) {
-                System.err.println("devdeskd: stopping took too long or failed: " + e);
+                // Stuck (a stop that never finishes): stop what's still running directly, by proof of ownership,
+                // rather than exit and leave it behind.
+                System.err.println("devdeskd: stopping in order took too long or failed (" + e
+                        + "); stopping what's still running directly");
+                s.close();
+                Optional<ProjectLoader.Result.Loaded> open;
+                synchronized (this) {
+                    open = project;
+                }
+                open.ifPresent(this::cleanUpSurvivors);
+                lock.ifPresent(ProjectLock::close);
             } finally {
                 s.close();
             }

@@ -89,6 +89,9 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         String name = containerName(spec.project(), spec.service());
         ensureImage(c.image(), output);
         removeOurLeftover(name, spec);
+        if (Thread.currentThread().isInterrupted()) {
+            throw new LaunchException("stopped before it was started", null); // a stop arrived while pulling
+        }
 
         String id;
         try {
@@ -119,16 +122,37 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         try {
             docker.startContainerCmd(id).exec();
         } catch (DockerException e) {
-            removeQuietly(id); // don't leave a created-but-never-started container behind
+            removeAfterFailedStart(id); // don't leave a created-but-never-started container behind
             throw new LaunchException("Docker could not start " + name + ": " + clean(e) + hint(clean(e)), e);
         }
+        try {
+            followLogs(id, output);
+            CompletableFuture<ExitStatus> exit = new CompletableFuture<>();
+            exits.put(id, exit);
+            Thread.ofVirtual().name("wait-" + name).start(() -> waitForExit(id, exit));
+            Long pid = docker.inspectContainerCmd(id).exec().getState().getPidLong();
+            return new RunningContainer(spec.service(), id, name, pid == null ? 0 : pid);
+        } catch (RuntimeException e) {
+            // It runs, but nobody would own it: remove it rather than leave it behind (e.g. a stop interrupted us).
+            removeAfterFailedStart(id);
+            throw new LaunchException(
+                    "Docker started " + name + " but DevDesk lost track of it, so it was removed: " + e.getMessage(),
+                    e);
+        }
+    }
 
-        followLogs(id, output);
-        CompletableFuture<ExitStatus> exit = new CompletableFuture<>();
-        exits.put(id, exit);
-        Thread.ofVirtual().name("wait-" + name).start(() -> waitForExit(id, exit));
-        Long pid = docker.inspectContainerCmd(id).exec().getState().getPidLong();
-        return new RunningContainer(spec.service(), id, name, pid == null ? 0 : pid);
+    /** Removes a container whose start failed. A pending interrupt (a stop) must not make this cleanup fail too. */
+    private void removeAfterFailedStart(String id) {
+        boolean interrupted = Thread.interrupted();
+        try {
+            removeQuietly(id);
+        } catch (RuntimeException e) {
+            // found by the leftover check next time (it carries our labels)
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @Override
@@ -186,28 +210,33 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         } catch (NotFoundException e) {
             output.accept(new OutputLine(StreamKind.STDERR, "[devdesk] pulling image " + image + " ..."));
         }
+        PullImageResultCallback pull = null;
         try {
-            docker.pullImageCmd(image)
-                    .exec(new PullImageResultCallback() {
-                        @Override
-                        public void onNext(PullResponseItem item) {
-                            super.onNext(item);
-                            // One line per finished layer, not per progress tick: enough to see it's moving.
-                            if ("Pull complete".equals(item.getStatus())) {
-                                output.accept(
-                                        new OutputLine(StreamKind.STDERR, "[devdesk] layer " + item.getId() + " done"));
-                            }
-                        }
-                    })
-                    .awaitCompletion();
+            pull = docker.pullImageCmd(image).exec(new PullImageResultCallback() {
+                @Override
+                public void onNext(PullResponseItem item) {
+                    super.onNext(item);
+                    // One line per finished layer, not per progress tick: enough to see it's moving.
+                    if ("Pull complete".equals(item.getStatus())) {
+                        output.accept(new OutputLine(StreamKind.STDERR, "[devdesk] layer " + item.getId() + " done"));
+                    }
+                }
+            });
+            pull.awaitCompletion();
         } catch (DockerException e) {
             throw new LaunchException(
                     "could not pull image " + image + ": " + clean(e)
                             + ". Check the name and tag, and that you're online (try: docker pull " + image + ")",
                     e);
         } catch (InterruptedException e) {
+            // A stop arrived while pulling: stop reading the download, so nothing keeps going in the background.
+            try {
+                pull.close();
+            } catch (java.io.IOException closing) {
+                // already closed
+            }
             Thread.currentThread().interrupt();
-            throw new LaunchException("interrupted while pulling " + image, e);
+            throw new LaunchException("stopped while pulling " + image, e);
         }
     }
 

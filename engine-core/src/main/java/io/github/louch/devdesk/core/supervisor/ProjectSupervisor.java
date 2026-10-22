@@ -128,6 +128,9 @@ public final class ProjectSupervisor implements AutoCloseable {
         Instant since;
 
         Optional<Handle> handle = Optional.empty();
+        /** The thread launching it right now, if any: interrupted by a stop, so a long image pull is abandoned. */
+        Thread launching;
+
         HealthTracker health;
         String lastProbe = "";
         ScheduledFuture<?> probeTask;
@@ -411,7 +414,11 @@ public final class ProjectSupervisor implements AutoCloseable {
                 cancelProbe(s);
                 cancelRestart(s);
                 s.handle.ifPresent(h -> stopInBackground(s, h));
-                // No process yet: it's still launching, and onLaunched() stops it as soon as it exists.
+                // No process yet: it's still launching, and onLaunched() stops it as soon as it exists. A container
+                // may be pulling its image for minutes: interrupt that, so the stop doesn't wait for the download.
+                if (s.handle.isEmpty() && s.launching != null && s.spec.workload() instanceof Workload.Container) {
+                    s.launching.interrupt();
+                }
             }
             case ServiceState.Crashed crashed -> {
                 cancelProbe(s);
@@ -563,7 +570,7 @@ public final class ProjectSupervisor implements AutoCloseable {
             remember(s.recentOutput, line, HISTORY_LINES);
             listener.accept(new ProjectEvent.Output(s.spec.name(), line));
         };
-        Thread.ofVirtual().name("launch-" + s.spec.name()).start(() -> {
+        s.launching = Thread.ofVirtual().name("launch-" + s.spec.name()).unstarted(() -> {
             Optional<String> busy = busyPort(s.spec);
             if (busy.isPresent()) {
                 onActor(() -> apply(s, new ServiceEvent.LaunchFailed(busy.get()), busy.get()));
@@ -594,9 +601,11 @@ public final class ProjectSupervisor implements AutoCloseable {
                 onActor(() -> launchFailed(s, "internal error while starting (a DevDesk bug, please report it): " + e));
             }
         });
+        s.launching.start();
     }
 
     private void launchFailed(Service s, String reason) {
+        s.launching = null;
         if (s.state instanceof ServiceState.Stopping) {
             apply(s, new ServiceEvent.StopFinished(), "stopped before it could start");
         } else {
@@ -625,6 +634,7 @@ public final class ProjectSupervisor implements AutoCloseable {
     }
 
     private void onLaunched(Service s, Handle handle) {
+        s.launching = null;
         s.handle = Optional.of(handle);
         CompletableFuture<ExitStatus> exit = switch (handle) {
             case Handle.Process p -> runtime.onExit(p.process());

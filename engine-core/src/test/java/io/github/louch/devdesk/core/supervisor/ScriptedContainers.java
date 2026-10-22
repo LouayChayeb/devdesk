@@ -33,6 +33,14 @@ final class ScriptedContainers implements ContainerRuntime {
         if (spec.container().image().equals("buggy/adapter")) {
             throw new NullPointerException("cmd was not specified"); // like the real docker-java bug we hit
         }
+        if (spec.container().image().equals("slow/pull")) {
+            try {
+                Thread.sleep(60_000); // a big image downloading: only a stop (interrupt) ends it early
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new LaunchException("stopped while pulling slow/pull", e);
+            }
+        }
         if (spec.container().image().equals("missing/image")) {
             throw new LaunchException("image missing/image not found: check the name and tag", null);
         }

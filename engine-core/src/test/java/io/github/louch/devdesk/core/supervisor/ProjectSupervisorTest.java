@@ -404,6 +404,27 @@ class ProjectSupervisorTest {
     }
 
     @Test
+    void stoppingDuringALongImagePullDoesNotWaitForTheDownload() throws Exception {
+        // Found on a real project: Ctrl+C while a big image downloaded made "stop" wait minutes, then give up.
+        var s = supervisor("""
+                version: 1
+                services:
+                  db: { container: { image: postgres:18 } }
+                  admin: { container: { image: slow/pull }, depends_on: [db] }
+                """);
+        s.up(); // admin is still "pulling" when the stop comes
+        Thread.sleep(300);
+
+        long started = System.nanoTime();
+        Map<String, ServiceState> after = s.down().get(10, TimeUnit.SECONDS);
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+        assertThat(after.values()).allMatch(st -> st instanceof ServiceState.Stopped);
+        assertThat(containers.stopped).contains("db");
+        assertThat(containers.started).doesNotContain("admin");
+    }
+
+    @Test
     void aCrashedContainerIsRemovedNotLeftBehind() throws Exception {
         supervisor("""
                 version: 1

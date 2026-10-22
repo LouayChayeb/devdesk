@@ -151,7 +151,7 @@ final class UpCommand implements Callable<Integer> {
                 });
         // Ctrl+C: the JVM runs this hook before exiting (with code 130), so everything is stopped in reverse order.
         Thread onCtrlC = new Thread(() -> {
-            stopAll(supervisor);
+            stopAll(supervisor, project, containers.get(), recorder);
             recorder.sessionEnded("Ctrl+C or terminal closed");
             lock.close();
         });
@@ -193,12 +193,22 @@ final class UpCommand implements Callable<Integer> {
                 : Map.of();
     }
 
-    private void stopAll(ProjectSupervisor supervisor) {
+    private void stopAll(
+            ProjectSupervisor supervisor, ProjectFile project, ContainerRuntime containers, Recorder recorder) {
         screen.println("Stopping everything (dependents first)...");
         try {
             supervisor.down().get(2, TimeUnit.MINUTES);
         } catch (TimeoutException e) {
-            err.println("devdesk: stopping took over 2 minutes; some services may still be running");
+            // Something is stuck (a stop that never finishes): don't walk away from what's still running. Stop it
+            // directly, by the same proof of ownership used after a crash (scope / group record / container label).
+            err.println("devdesk: stopping in order took over 2 minutes; stopping what's still running directly");
+            supervisor.close();
+            List<Survivors.Report> rest = survivors(project, containers).cleanUp(project.project());
+            rest.forEach(r -> {
+                String what = r.leftover().service() + ": " + r.leftover().description() + " → " + r.result();
+                err.println("    " + what);
+                recorder.accept(new ProjectEvent.Warning(r.leftover().service(), "stopped directly: " + what));
+            });
         } catch (Exception e) {
             err.println("devdesk: stopping failed: " + e);
         } finally {
@@ -207,16 +217,21 @@ final class UpCommand implements Callable<Integer> {
         }
     }
 
+    /** What DevDesk started for this project, found by proof of ownership: process scopes or groups, containers. */
+    private Survivors survivors(ProjectFile project, ContainerRuntime containers) {
+        List<LeftoverFinder> finders = new ArrayList<>(List.of(engine.leftovers()));
+        if (containers instanceof DockerContainerRuntime docker) {
+            finders.add(docker.leftovers());
+        }
+        return new Survivors(finders);
+    }
+
     /**
      * We hold the lock, so nothing found now belongs to a living DevDesk: it's what a killed one left behind. It's
      * stopped before starting again, otherwise it would hold the same ports and confuse everything.
      */
     private void cleanUpSurvivors(ProjectFile project, ContainerRuntime containers, Recorder recorder) {
-        List<LeftoverFinder> finders = new ArrayList<>(List.of(engine.leftovers()));
-        if (containers instanceof DockerContainerRuntime docker) {
-            finders.add(docker.leftovers());
-        }
-        List<Survivors.Report> reports = new Survivors(finders).cleanUp(project.project());
+        List<Survivors.Report> reports = survivors(project, containers).cleanUp(project.project());
         if (reports.isEmpty()) {
             return;
         }
