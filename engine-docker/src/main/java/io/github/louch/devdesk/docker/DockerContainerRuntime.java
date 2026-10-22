@@ -223,9 +223,19 @@ public final class DockerContainerRuntime implements ContainerRuntime {
             return;
         }
         Map<String, String> labels = existing.getConfig().getLabels();
+        // The key (name + folder hash) too: two projects with the same name in different folders get the same
+        // container name, and one must never remove the other's container.
         boolean ours = labels != null
                 && spec.project().equals(labels.get(PROJECT_LABEL))
+                && spec.projectKey().equals(labels.get(PROJECT_KEY_LABEL))
                 && spec.service().equals(labels.get(SERVICE_LABEL));
+        if (!ours && labels != null && spec.project().equals(labels.get(PROJECT_LABEL))) {
+            throw new LaunchException(
+                    "a container named " + name + " already runs for another DevDesk project also called \""
+                            + spec.project() + "\" (in another folder), so DevDesk won't touch it. Stop that project"
+                            + " first, or give one of them another name: in devdesk.yaml",
+                    null);
+        }
         if (!ours) {
             throw new LaunchException(
                     "a container named " + name + " already exists and wasn't created by DevDesk, "
