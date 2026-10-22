@@ -1065,6 +1065,14 @@ export class Engine {
   changes(): Promise<DataAnswer<{ known: boolean; message?: string; since?: string; changes?: { area: string; what: string; detail: string }[] }>> {
     return this.data('GET', '/project/changes', undefined, (b) => b);
   }
+  /** The same changes ranked against what fails now: proven / likely / unknown, with why, a caveat and next steps. */
+  verdict(): Promise<DataAnswer<Verdict>> {
+    return this.data('GET', '/project/verdict', undefined, (b) => b);
+  }
+  /** "Prove it": replays the previous and current image in throwaway containers (up to ~30 s). */
+  prove(image: string): Promise<DataAnswer<Proof & { service: string }>> {
+    return this.data('POST', '/project/verdict/prove', { image }, (b) => b);
+  }
   migrations(): Promise<DataAnswer<MigrationSource[]>> {
     return this.data('GET', '/migrations', undefined, (b) => b.sources);
   }
@@ -1493,4 +1501,36 @@ export class Engine {
     });
     return { ok: res.ok, status: res.status, body: await res.json() };
   }
+}
+
+/** One replay of an image change (see ImageProof in the engine). */
+export interface Proof {
+  outcome: 'proven' | 'both_pass' | 'both_fail' | 'odd' | 'cannot_replay';
+  summary: string;
+  evidence: string[];
+  caveat: string;
+}
+
+/** One ranked change of the "what changed" verdict. */
+export interface Suspect {
+  kind: string;
+  subject: string;
+  area: string;
+  what: string;
+  detail: string;
+  confidence: 'proven' | 'likely' | 'unknown';
+  services: string[];
+  reasons: string[];
+  caveat: string;
+  provable: boolean;
+  proof?: Proof;
+  bisect?: { commands: string[]; commits: { id: string; subject: string; files: number; touching: number }[] };
+}
+
+export interface Verdict {
+  known: boolean;
+  message?: string;
+  since?: string;
+  failing?: boolean;
+  items?: Suspect[];
 }

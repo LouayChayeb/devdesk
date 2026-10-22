@@ -32,6 +32,7 @@ import io.github.louch.devdesk.data.SqliteFiles;
 import io.github.louch.devdesk.data.SqsQueues;
 import io.github.louch.devdesk.data.StateFolder;
 import io.github.louch.devdesk.docker.DockerConnection;
+import io.github.louch.devdesk.linux.changes.KnownGoodFiles;
 import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
 import io.github.louch.devdesk.linux.doctor.ToolVersions;
 import io.github.louch.devdesk.linux.health.LocalHealthProbe;
@@ -118,9 +119,11 @@ public final class Main {
         var changes = new ChangeTracker(
                 session,
                 session::docker,
-                new ToolVersions(env),
-                StateFolder.of(env).resolve("known-good"),
-                clock);
+                new KnownGoodFiles(StateFolder.of(env).resolve("known-good"), new ToolVersions(env), clock),
+                new LocalHealthProbe(new LinuxProcessRuntime(false, clock, random)),
+                env,
+                clock,
+                random);
         changes.start();
         var setup = new SetupWorkbench(session, () -> DockerConnection.connect(env), env, random);
         var server = new ApiServer(

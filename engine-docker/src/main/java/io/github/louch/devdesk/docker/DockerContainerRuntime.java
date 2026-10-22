@@ -68,7 +68,7 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     }
 
     /** The command override split like a shell would; a missing closing quote is a launch error, not a guess. */
-    private static Optional<List<String>> arguments(Workload.Container c) throws LaunchException {
+    static Optional<List<String>> arguments(Workload.Container c) throws LaunchException {
         if (c.command().isEmpty()) {
             return Optional.empty(); // the image's own default command
         }
@@ -302,7 +302,7 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     }
 
     /** Docker error bodies look like {"message":"..."}: keep only the message. */
-    private static String clean(DockerException e) {
+    static String clean(DockerException e) {
         String m = e.getMessage() == null ? "" : e.getMessage();
         int start = m.indexOf("\"message\":\"");
         if (start >= 0) {
@@ -447,6 +447,11 @@ public final class DockerContainerRuntime implements ContainerRuntime {
             }
         }
         return out;
+    }
+
+    /** Throwaway replicas for "Prove it", through the same Docker connection. */
+    public DockerImageReplay imageReplay(java.util.random.RandomGenerator random) {
+        return new DockerImageReplay(docker, random);
     }
 
     /** The underlying client, for this module's tests. */

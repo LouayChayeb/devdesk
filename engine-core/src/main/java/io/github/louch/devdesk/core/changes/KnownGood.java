@@ -33,9 +33,26 @@ public record KnownGood(
     /**
      * One difference.
      *
+     * @param kind what sort of change, so the verdict can match it with findings without reading text
+     * @param subject what changed, machine-readable: the image reference, the file's relative path, the variable
+     *     name, the tool, or the previous commit (for {@link Kind#CODE})
      * @param area "devdesk.yaml", ".env", "lock file", "image", "tool", "git"
      */
-    public record Change(String area, String what, String detail) {}
+    public record Change(Kind kind, String subject, String area, String what, String detail) {}
+
+    /** The sorts of change DevDesk can see. */
+    public enum Kind {
+        IMAGE,
+        TOOL,
+        CONFIG,
+        ENV_FILE,
+        ENV_ADDED,
+        ENV_REMOVED,
+        ENV_VALUE,
+        LOCKFILE,
+        BRANCH,
+        CODE
+    }
 
     /** What differs between then (when it worked) and now, most likely causes first. */
     public static List<Change> compare(KnownGood then, KnownGood now) {
@@ -46,6 +63,8 @@ public record KnownGood(
             String b = now.images.get(image);
             if (a != null && b != null && !a.equals(b)) {
                 out.add(new Change(
+                        Kind.IMAGE,
+                        image,
                         "image",
                         image,
                         "now a different image (" + shortId(a) + " → " + shortId(b)
@@ -56,7 +75,7 @@ public record KnownGood(
             String a = then.tools.getOrDefault(tool, "not found");
             String b = now.tools.getOrDefault(tool, "not found");
             if (!a.equals(b)) {
-                out.add(new Change("tool", tool, a + " → " + b));
+                out.add(new Change(Kind.TOOL, tool, "tool", tool, a + " → " + b));
             }
         }
         out.addAll(yaml(then.devdeskYaml, now.devdeskYaml));
@@ -64,20 +83,21 @@ public record KnownGood(
             Map<String, String> a = then.envFiles.get(file);
             Map<String, String> b = now.envFiles.get(file);
             if (a == null) {
-                out.add(new Change(".env", file, "new file"));
+                out.add(new Change(Kind.ENV_FILE, file, ".env", file, "new file"));
                 continue;
             }
             if (b == null) {
-                out.add(new Change(".env", file, "deleted"));
+                out.add(new Change(Kind.ENV_FILE, file, ".env", file, "deleted"));
                 continue;
             }
             for (String key : union(a.keySet(), b.keySet())) {
                 if (!a.containsKey(key)) {
-                    out.add(new Change(".env", file + ": " + key, "added"));
+                    out.add(new Change(Kind.ENV_ADDED, key, ".env", file + ": " + key, "added"));
                 } else if (!b.containsKey(key)) {
-                    out.add(new Change(".env", file + ": " + key, "removed"));
+                    out.add(new Change(Kind.ENV_REMOVED, key, ".env", file + ": " + key, "removed"));
                 } else if (!a.get(key).equals(b.get(key))) {
-                    out.add(new Change(".env", file + ": " + key, "value changed (values are never shown)"));
+                    out.add(new Change(
+                            Kind.ENV_VALUE, key, ".env", file + ": " + key, "value changed (values are never shown)"));
                 }
             }
         }
@@ -85,18 +105,26 @@ public record KnownGood(
             String a = then.files.get(file);
             String b = now.files.get(file);
             if (a == null) {
-                out.add(new Change("lock file", file, "new"));
+                out.add(new Change(Kind.LOCKFILE, file, "lock file", file, "new"));
             } else if (b == null) {
-                out.add(new Change("lock file", file, "deleted"));
+                out.add(new Change(Kind.LOCKFILE, file, "lock file", file, "deleted"));
             } else if (!a.equals(b)) {
-                out.add(new Change("lock file", file, "changed: dependencies were added or upgraded"));
+                out.add(new Change(
+                        Kind.LOCKFILE, file, "lock file", file, "changed: dependencies were added or upgraded"));
             }
         }
         if (!then.branch.equals(now.branch)) {
-            out.add(new Change("git", "branch", then.branch.orElse("(none)") + " → " + now.branch.orElse("(none)")));
+            out.add(new Change(
+                    Kind.BRANCH,
+                    now.branch.orElse(""),
+                    "git",
+                    "branch",
+                    then.branch.orElse("(none)") + " → " + now.branch.orElse("(none)")));
         }
         if (then.commit.isPresent() && now.commit.isPresent() && !then.commit.equals(now.commit)) {
             out.add(new Change(
+                    Kind.CODE,
+                    then.commit.get(),
                     "git",
                     "commit",
                     shortId(then.commit.get()) + " → " + shortId(now.commit.get()) + ": code changed too (git log "
@@ -116,12 +144,12 @@ public record KnownGood(
         Set<String> inA = new LinkedHashSet<>(a);
         for (String l : a) {
             if (!inB.contains(l)) {
-                out.add(new Change("devdesk.yaml", "removed", masked(l)));
+                out.add(new Change(Kind.CONFIG, masked(l), "devdesk.yaml", "removed", masked(l)));
             }
         }
         for (String l : b) {
             if (!inA.contains(l)) {
-                out.add(new Change("devdesk.yaml", "added", masked(l)));
+                out.add(new Change(Kind.CONFIG, masked(l), "devdesk.yaml", "added", masked(l)));
             }
         }
         return out;

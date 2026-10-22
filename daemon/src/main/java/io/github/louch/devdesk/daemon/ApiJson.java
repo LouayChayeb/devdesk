@@ -1,5 +1,8 @@
 package io.github.louch.devdesk.daemon;
 
+import io.github.louch.devdesk.core.changes.Bisect;
+import io.github.louch.devdesk.core.changes.ImageProof;
+import io.github.louch.devdesk.core.changes.Suspect;
 import io.github.louch.devdesk.core.config.ConfigProblem;
 import io.github.louch.devdesk.core.data.DatabaseStats;
 import io.github.louch.devdesk.core.data.DatabaseTarget;
@@ -151,6 +154,52 @@ final class ApiJson {
         m.put("explanation", f.explanation());
         m.put("evidence", f.evidence());
         m.put("actions", f.actions());
+        return m;
+    }
+
+    /** One ranked change of the "what changed" verdict, with its proof or bisect plan when there is one. */
+    static Map<String, Object> verdictItem(Suspect s, Optional<Bisect.Plan> bisect, Optional<ImageProof.Result> proof) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", s.change().kind().name().toLowerCase());
+        m.put("subject", s.change().subject());
+        m.put("area", s.change().area());
+        m.put("what", s.change().what());
+        m.put("detail", s.change().detail());
+        m.put("confidence", s.confidence().name().toLowerCase());
+        m.put("services", s.services());
+        m.put("reasons", s.reasons());
+        m.put("caveat", s.caveat());
+        m.put("provable", s.provable());
+        proof.ifPresent(p -> m.put("proof", proofBody(p)));
+        bisect.ifPresent(b -> m.put(
+                "bisect",
+                Map.of(
+                        "commands",
+                        b.commands(),
+                        "commits",
+                        b.commits().stream()
+                                .limit(20)
+                                .map(r -> Map.of(
+                                        "id", r.commit().id(),
+                                        "subject", r.commit().subject(),
+                                        "files", r.commit().files().size(),
+                                        "touching", r.touching()))
+                                .toList())));
+        return m;
+    }
+
+    static Map<String, Object> proof(String service, ImageProof.Result r) {
+        Map<String, Object> m = proofBody(r);
+        m.put("service", service);
+        return m;
+    }
+
+    private static Map<String, Object> proofBody(ImageProof.Result r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("outcome", r.outcome().name().toLowerCase());
+        m.put("summary", r.summary());
+        m.put("evidence", r.evidence());
+        m.put("caveat", r.caveat());
         return m;
     }
 

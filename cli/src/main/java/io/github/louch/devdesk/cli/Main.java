@@ -2,7 +2,9 @@ package io.github.louch.devdesk.cli;
 
 import io.github.louch.devdesk.core.diagnosis.DiagnosisEngine;
 import io.github.louch.devdesk.docker.DockerConnection;
+import io.github.louch.devdesk.linux.changes.KnownGoodFiles;
 import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
+import io.github.louch.devdesk.linux.doctor.ToolVersions;
 import io.github.louch.devdesk.linux.health.LocalHealthProbe;
 import io.github.louch.devdesk.linux.network.ProcNetListeners;
 import io.github.louch.devdesk.linux.process.LinuxProcessRuntime;
@@ -37,6 +39,7 @@ public final class Main {
         var trust = new TrustStore(TrustStore.defaultFile(env));
         var system = new LinuxIntrospection(new ProcNetListeners());
         var diagnosis = DiagnosisEngine.standard();
+        var knownGood = new KnownGoodFiles(KnownGoodFiles.defaultFolder(env), new ToolVersions(env), clock);
         var engine = new UpCommand.Engine(
                 runtime,
                 () -> DockerConnection.connect(env),
@@ -46,6 +49,7 @@ public final class Main {
                 new ScopeLeftovers(),
                 new ProcResources(),
                 trust,
+                knownGood,
                 clock,
                 random);
         var stdin = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
@@ -73,6 +77,15 @@ public final class Main {
                 .addSubcommand(
                         "why",
                         new WhyCommand(
-                                env, system, diagnosis, () -> DockerConnection.connect(env), System.out, System.err));
+                                env,
+                                system,
+                                diagnosis,
+                                () -> DockerConnection.connect(env),
+                                knownGood,
+                                probe,
+                                random,
+                                clock,
+                                System.out,
+                                System.err));
     }
 }

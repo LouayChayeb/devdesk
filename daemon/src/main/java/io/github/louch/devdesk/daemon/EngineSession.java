@@ -15,6 +15,7 @@ import io.github.louch.devdesk.core.data.SqlBrowser;
 import io.github.louch.devdesk.core.data.SqlEditor;
 import io.github.louch.devdesk.core.diagnosis.DiagnosisContext;
 import io.github.louch.devdesk.core.diagnosis.DiagnosisEngine;
+import io.github.louch.devdesk.core.diagnosis.Finding;
 import io.github.louch.devdesk.core.diagnosis.Ghosts;
 import io.github.louch.devdesk.core.diagnosis.Introspection;
 import io.github.louch.devdesk.core.diagnosis.ProjectLinks;
@@ -134,6 +135,8 @@ final class EngineSession implements AutoCloseable {
     private final Map<String, ServiceState> states = new LinkedHashMap<>();
     private final Map<String, Deque<Map<String, Object>>> output = new LinkedHashMap<>();
     private final Map<String, List<Map<String, Object>>> findings = new LinkedHashMap<>();
+    /** The same findings as objects, for the "what changed" verdict to match against. */
+    private final Map<String, List<Finding>> rawFindings = new LinkedHashMap<>();
 
     private long sequence;
 
@@ -215,6 +218,7 @@ final class EngineSession implements AutoCloseable {
             states.clear();
             output.clear();
             findings.clear();
+            rawFindings.clear();
             Map<String, Object> none = new HashMap<>();
             none.put("project", null); // the app shows "Open a project" again
             broadcast("project", none);
@@ -434,6 +438,7 @@ final class EngineSession implements AutoCloseable {
                 states.clear();
                 output.clear();
                 findings.clear();
+                rawFindings.clear();
                 l.project().services().keySet().forEach(name -> {
                     states.put(name, new ServiceState.Stopped());
                     output.put(name, new ArrayDeque<>());
@@ -621,6 +626,11 @@ final class EngineSession implements AutoCloseable {
     /** The open project and its services' states right now, for the API client. */
     synchronized Optional<Current> current() {
         return project.map(l -> new Current(l.project(), Map.copyOf(states)));
+    }
+
+    /** What the running project's diagnosis says right now, every service. */
+    synchronized List<Finding> findingsNow() {
+        return rawFindings.values().stream().flatMap(List::stream).toList();
     }
 
     /** A copy: reading it never races with the supervisor's events. */
@@ -843,6 +853,7 @@ final class EngineSession implements AutoCloseable {
                     lock = Optional.of(acquired.lock());
                     // A new session: record it, and clean up what a killed DevDesk left (we hold the lock now).
                     findings.clear();
+                    rawFindings.clear();
                     recorder.ifPresent(r -> r.sessionStarted("desktop app"));
                     cleanUpSurvivors(l);
                 }
@@ -1112,6 +1123,7 @@ final class EngineSession implements AutoCloseable {
                 states.put(c.service(), c.to());
                 if (c.to() instanceof ServiceState.Starting) {
                     findings.remove(c.service()); // a new attempt: old findings no longer apply
+                    rawFindings.remove(c.service());
                 }
                 broadcast(
                         "state",
@@ -1153,6 +1165,7 @@ final class EngineSession implements AutoCloseable {
                 List<Map<String, Object>> list =
                         d.findings().stream().map(ApiJson::finding).toList();
                 findings.put(d.service(), list);
+                rawFindings.put(d.service(), List.copyOf(d.findings()));
                 broadcast("diagnosis", Map.of("service", d.service(), "findings", list));
             }
             case ProjectEvent.Resources r -> {

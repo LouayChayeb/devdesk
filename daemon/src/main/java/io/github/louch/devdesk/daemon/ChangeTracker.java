@@ -1,82 +1,71 @@
 package io.github.louch.devdesk.daemon;
 
-import io.github.louch.devdesk.core.branch.BranchStacks;
+import io.github.louch.devdesk.core.changes.ChangeReport;
+import io.github.louch.devdesk.core.changes.ImageProof;
 import io.github.louch.devdesk.core.changes.KnownGood;
-import io.github.louch.devdesk.core.config.EnvFile;
-import io.github.louch.devdesk.core.doctor.ToolNeeds;
+import io.github.louch.devdesk.core.changes.Suspect;
+import io.github.louch.devdesk.core.changes.Symptom;
+import io.github.louch.devdesk.core.health.HealthProbe;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
 import io.github.louch.devdesk.core.project.Workload;
 import io.github.louch.devdesk.core.state.ServiceState;
+import io.github.louch.devdesk.core.supervisor.ServiceEnvironment;
 import io.github.louch.devdesk.docker.DockerConnection;
-import io.github.louch.devdesk.linux.doctor.ToolVersions;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import io.github.louch.devdesk.linux.changes.GitLog;
+import io.github.louch.devdesk.linux.changes.KnownGoodFiles;
 import java.time.Clock;
-import java.time.Instant;
-import java.util.HexFormat;
+import java.time.Duration;
+import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
-import java.util.stream.Stream;
+import java.util.random.RandomGenerator;
 
 /**
  * "It worked yesterday": each time the whole project is up and healthy, saves what it took to get there (see
- * {@link KnownGood}); when something breaks, compares today with that. One file per project in DevDesk's state folder.
+ * {@link KnownGood}); when something breaks, ranks what changed since against the current findings (the verdict), and
+ * can replay an image change to prove it.
  */
 final class ChangeTracker {
 
-    /** Files whose change means dependencies changed (looked for in the project folder and each service's folder). */
-    private static final List<String> LOCK_FILES = List.of(
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-            "poetry.lock",
-            "Pipfile.lock",
-            "uv.lock",
-            "requirements.txt",
-            "go.sum",
-            "Cargo.lock",
-            "Gemfile.lock",
-            "composer.lock",
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "gradle.lockfile",
-            "Dockerfile");
-
-    private static final Pattern ENV_FILE =
-            Pattern.compile("\\.env(?![A-Za-z0-9._-]*\\.(example|sample|template|dist)$)[A-Za-z0-9._-]*");
     private static final Set<String> GOOD = Set.of("healthy", "running", "completed");
+    /** Both replicas run at the same time, so this is the whole proof's limit. */
+    private static final Duration PROOF_CAP = Duration.ofSeconds(30);
 
     private final EngineSession session;
     private final Supplier<DockerConnection.Result> docker;
-    private final ToolVersions tools;
-    private final Path folder;
+    private final KnownGoodFiles files;
+    private final HealthProbe probe;
+    private final Map<String, String> environment;
     private final Clock clock;
+    private final RandomGenerator random;
+    private final ChangeReport report;
+    /** "image@current id" → the last proof: shown with the verdict until the image changes again. */
+    private final Map<String, ImageProof.Result> proofs = new ConcurrentHashMap<>();
     /** True once this clean start was saved: the next save waits until the project goes down or breaks first. */
     private volatile boolean savedThisRun;
 
     ChangeTracker(
             EngineSession session,
             Supplier<DockerConnection.Result> docker,
-            ToolVersions tools,
-            Path folder,
-            Clock clock) {
+            KnownGoodFiles files,
+            HealthProbe probe,
+            Map<String, String> environment,
+            Clock clock,
+            RandomGenerator random) {
         this.session = session;
         this.docker = docker;
-        this.tools = tools;
-        this.folder = folder;
+        this.files = files;
+        this.probe = probe;
+        this.environment = environment;
         this.clock = clock;
+        this.random = random;
+        this.report = new ChangeReport(files::load, p -> files.take(p, this::imageIds), GitLog::since);
     }
 
     void start() {
@@ -95,7 +84,7 @@ final class ChangeTracker {
     }
 
     /** Saves the state when every service is up (healthy, running, or a finished one-off job). */
-    private void look() throws InterruptedException {
+    private void look() {
         Optional<EngineSession.Current> current = session.current();
         if (current.isEmpty() || current.get().states().isEmpty()) {
             savedThisRun = false;
@@ -110,30 +99,23 @@ final class ChangeTracker {
         }
         if (!savedThisRun) {
             ProjectSpec p = current.get().project();
-            save(p, take(p));
+            files.save(p, files.take(p, this::imageIds));
             savedThisRun = true;
         }
     }
 
-    /** What changed since the project last started cleanly. */
+    /** What changed since the project last started cleanly, as a plain list (crash bundles keep this shape). */
     EngineSession.Answer changes() {
         Optional<EngineSession.Current> current = session.current();
         if (current.isEmpty()) {
             return new EngineSession.Answer(404, ApiJson.error("no project is open"));
         }
         ProjectSpec p = current.get().project();
-        Optional<KnownGood> then = load(p);
+        Optional<KnownGood> then = files.load(p);
         if (then.isEmpty()) {
-            return new EngineSession.Answer(
-                    200,
-                    Map.of(
-                            "known",
-                            false,
-                            "message",
-                            "DevDesk hasn't seen this project start cleanly yet. Once every service is up, it"
-                                    + " remembers that state, and this compares with it."));
+            return notKnown();
         }
-        List<KnownGood.Change> changes = KnownGood.compare(then.get(), take(p));
+        List<KnownGood.Change> changes = KnownGood.compare(then.get(), files.take(p, this::imageIds));
         return new EngineSession.Answer(
                 200,
                 Map.of(
@@ -145,160 +127,104 @@ final class ChangeTracker {
                                         .toList()));
     }
 
-    // ---- taking the state ----
-
-    private KnownGood take(ProjectSpec p) {
-        Path root = p.root();
-        Map<String, Map<String, String>> env = new LinkedHashMap<>();
-        try (Stream<Path> files = Files.list(root)) {
-            for (Path f : files.filter(
-                            f -> ENV_FILE.matcher(f.getFileName().toString()).matches())
-                    .sorted()
-                    .toList()) {
-                Map<String, String> keys = new LinkedHashMap<>();
-                // Salted with the project and the key: a short secret can't be found by hashing guesses elsewhere.
-                EnvFile.parse(read(f)).forEach((k, v) -> keys.put(k, hash(p.key() + "\u0000" + k + "\u0000" + v)));
-                env.put(f.getFileName().toString(), keys);
-            }
-        } catch (IOException e) {
-            // no env files to compare
+    /** The ranked verdict: each change judged against what fails now, most likely first. */
+    EngineSession.Answer verdict() {
+        Optional<EngineSession.Current> current = session.current();
+        if (current.isEmpty()) {
+            return new EngineSession.Answer(404, ApiJson.error("no project is open"));
         }
-        Set<Path> dirs = new LinkedHashSet<>(List.of(root));
-        p.services().values().stream().map(ServiceSpec::directory).forEach(dirs::add);
-        Map<String, String> files = new LinkedHashMap<>();
-        for (Path dir : dirs) {
-            for (String name : LOCK_FILES) {
-                Path f = dir.resolve(name);
-                if (Files.isRegularFile(f)) {
-                    files.put(root.relativize(f).toString(), hash(read(f)));
-                }
-            }
+        ProjectSpec p = current.get().project();
+        List<Symptom> symptoms = session.findingsNow().stream().map(Symptom::of).toList();
+        Optional<ChangeReport.Report> r = report.build(p, symptoms);
+        if (r.isEmpty()) {
+            return notKnown();
         }
-        Set<String> images = new LinkedHashSet<>();
-        p.services().values().forEach(s -> {
-            if (s.workload() instanceof Workload.Container c) {
-                images.add(c.image());
-            }
-        });
-        Map<String, String> imageIds =
-                images.isEmpty() || !(docker.get() instanceof DockerConnection.Result.Connected c)
-                        ? Map.of()
-                        : c.runtime().imageIds(images);
-        Map<String, String> versions = new LinkedHashMap<>();
-        ToolNeeds.of(p, f -> Files.isRegularFile(f) ? Optional.of(read(f)) : Optional.empty()).stream()
-                .map(ToolNeeds.Need::tool)
-                .distinct()
-                .forEach(tool -> tools.of(tool).ifPresent(v -> versions.put(tool, v)));
-        Optional<String> branch = git(root, "HEAD").flatMap(BranchStacks::branch);
-        return new KnownGood(
-                clock.instant(),
-                branch,
-                commit(root),
-                read(root.resolve("devdesk.yaml")),
-                env,
-                files,
-                imageIds,
-                versions);
+        Map<String, String> idsNow = imageIds(r.get().items().stream()
+                .map(i -> i.suspect().change())
+                .filter(c -> c.kind() == KnownGood.Kind.IMAGE)
+                .map(KnownGood.Change::subject)
+                .toList());
+        List<Map<String, Object>> items = r.get().items().stream()
+                .map(i -> {
+                    Suspect s = i.suspect();
+                    Optional<ImageProof.Result> proof = s.provable()
+                            ? Optional.ofNullable(proofs.get(proofKey(s.change().subject(), idsNow)))
+                            : Optional.empty();
+                    return ApiJson.verdictItem(proof.map(x -> x.applyTo(s)).orElse(s), i.bisect(), proof);
+                })
+                .toList();
+        return new EngineSession.Answer(
+                200,
+                Map.of(
+                        "known",
+                        true,
+                        "since",
+                        r.get().since().toString(),
+                        "failing",
+                        !symptoms.isEmpty(),
+                        "items",
+                        items));
     }
 
-    /** The commit checked out: HEAD names a branch whose file (or packed-refs line) holds it, or is the commit. */
-    private static Optional<String> commit(Path root) {
-        Optional<String> head = git(root, "HEAD").map(String::strip);
-        if (head.isEmpty()) {
-            return Optional.empty();
+    /**
+     * "Prove it": replays the image {@code image} pointed to at the last clean start and the one it points to now, in
+     * throwaway containers, with the service's health check. Takes up to {@link #PROOF_CAP}.
+     */
+    EngineSession.Answer prove(String image) throws InterruptedException {
+        Optional<EngineSession.Current> current = session.current();
+        if (current.isEmpty()) {
+            return new EngineSession.Answer(404, ApiJson.error("no project is open"));
         }
-        if (!head.get().startsWith("ref: ")) {
-            return head; // detached: HEAD is the commit itself
+        ProjectSpec p = current.get().project();
+        Optional<ServiceSpec> service = serviceFor(
+                p, image, session.findingsNow().stream().map(Symptom::of).toList());
+        if (service.isEmpty()) {
+            return new EngineSession.Answer(404, ApiJson.error("no service runs the image " + image));
         }
-        String ref = head.get().substring(5).strip();
-        return git(root, ref)
-                .map(String::strip)
-                .or(() -> git(root, "packed-refs")
-                        .flatMap(packed -> packed.lines()
-                                .filter(l -> l.endsWith(" " + ref))
-                                .map(l -> l.substring(0, l.indexOf(' ')))
-                                .findFirst()));
+        Optional<String> previous = report.previousImage(p, image);
+        if (previous.isEmpty()) {
+            return new EngineSession.Answer(
+                    409, ApiJson.error("DevDesk didn't see " + image + " at the last clean start: nothing to compare"));
+        }
+        if (!(docker.get() instanceof DockerConnection.Result.Connected c)) {
+            return new EngineSession.Answer(503, ApiJson.error("Docker isn't reachable, so nothing can be replayed"));
+        }
+        var proof = new ImageProof(c.runtime().imageReplay(random), probe, clock, Duration.ofSeconds(1));
+        ImageProof.Result result = proof.prove(
+                service.get(), previous.get(), ServiceEnvironment.values(p, service.get(), environment), PROOF_CAP);
+        proofs.put(proofKey(image, imageIds(List.of(image))), result);
+        return new EngineSession.Answer(200, ApiJson.proof(service.get().name(), result));
     }
 
-    /** A file of the git folder, also for a worktree (whose .git is a file naming the real folder). */
-    private static Optional<String> git(Path root, String name) {
-        Path dotGit = root.resolve(".git");
-        Path dir = dotGit;
-        if (Files.isRegularFile(dotGit)) {
-            Optional<String> real = BranchStacks.gitDirOf(read(dotGit));
-            if (real.isEmpty()) {
-                return Optional.empty();
-            }
-            dir = root.resolve(real.get());
-        }
-        Path f = dir.resolve(name);
-        return Files.isRegularFile(f) ? Optional.of(read(f)) : Optional.empty();
+    /** The service to replay: one that runs this image and fails, else the first one that runs it. */
+    static Optional<ServiceSpec> serviceFor(ProjectSpec p, String image, List<Symptom> symptoms) {
+        List<ServiceSpec> running = p.services().values().stream()
+                .filter(s -> s.workload() instanceof Workload.Container k
+                        && k.image().equals(image))
+                .toList();
+        return running.stream()
+                .filter(s -> symptoms.stream().anyMatch(x -> x.service().equals(s.name())))
+                .findFirst()
+                .or(() -> running.stream().findFirst());
     }
 
-    // ---- saving ----
-
-    private Path file(ProjectSpec p) {
-        return folder.resolve(p.key() + ".json");
+    private static String proofKey(String image, Map<String, String> idsNow) {
+        return image + "@" + idsNow.getOrDefault(image, "?");
     }
 
-    private void save(ProjectSpec p, KnownGood k) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("at", k.at().toString());
-        m.put("branch", k.branch().orElse(null));
-        m.put("commit", k.commit().orElse(null));
-        m.put("devdeskYaml", k.devdeskYaml());
-        m.put("envFiles", k.envFiles());
-        m.put("files", k.files());
-        m.put("images", k.images());
-        m.put("tools", k.tools());
-        try {
-            Files.createDirectories(folder);
-            // Written next to it, then moved: a crash mid-write never leaves half a file.
-            Path tmp = folder.resolve(p.key() + ".json.tmp");
-            Files.writeString(tmp, ApiJson.write(m), StandardCharsets.UTF_8);
-            Files.move(
-                    tmp,
-                    file(p),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
-            // not saved: the comparison then uses the previous clean start
-        }
+    private Map<String, String> imageIds(Collection<String> images) {
+        return images.isEmpty() || !(docker.get() instanceof DockerConnection.Result.Connected c)
+                ? Map.of()
+                : c.runtime().imageIds(images);
     }
 
-    @SuppressWarnings("unchecked")
-    private Optional<KnownGood> load(ProjectSpec p) {
-        try {
-            Map<String, Object> m = ApiJson.MAPPER.readValue(Files.readString(file(p)), Map.class);
-            return Optional.of(new KnownGood(
-                    Instant.parse((String) m.get("at")),
-                    Optional.ofNullable((String) m.get("branch")),
-                    Optional.ofNullable((String) m.get("commit")),
-                    String.valueOf(m.get("devdeskYaml")),
-                    (Map<String, Map<String, String>>) m.get("envFiles"),
-                    (Map<String, String>) m.get("files"),
-                    (Map<String, String>) m.get("images"),
-                    (Map<String, String>) m.get("tools")));
-        } catch (IOException | RuntimeException e) {
-            return Optional.empty(); // never saved, or unreadable
-        }
-    }
-
-    private static String read(Path f) {
-        try {
-            return Files.readString(f, StandardCharsets.UTF_8);
-        } catch (IOException | RuntimeException e) {
-            return "";
-        }
-    }
-
-    /** A value's fingerprint: equal values give equal hashes, and the value can't be read back from it. */
-    private static String hash(String value) {
-        try {
-            return HexFormat.of()
-                    .formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("every Java has SHA-256", e);
-        }
+    private static EngineSession.Answer notKnown() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("known", false);
+        body.put(
+                "message",
+                "DevDesk hasn't seen this project start cleanly yet. Once every service is up, it remembers that"
+                        + " state, and this compares with it.");
+        return new EngineSession.Answer(200, body);
     }
 }

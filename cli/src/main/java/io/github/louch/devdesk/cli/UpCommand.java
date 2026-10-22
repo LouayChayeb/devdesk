@@ -20,6 +20,7 @@ import io.github.louch.devdesk.core.supervisor.ProjectEvent;
 import io.github.louch.devdesk.core.supervisor.ProjectSupervisor;
 import io.github.louch.devdesk.docker.DockerConnection;
 import io.github.louch.devdesk.docker.DockerContainerRuntime;
+import io.github.louch.devdesk.linux.changes.KnownGoodFiles;
 import io.github.louch.devdesk.linux.history.JsonlHistoryStore;
 import io.github.louch.devdesk.linux.project.ProjectLock;
 import io.github.louch.devdesk.linux.trust.TrustStore;
@@ -75,6 +76,7 @@ final class UpCommand implements Callable<Integer> {
             LeftoverFinder leftovers,
             ResourceSampler resources,
             TrustStore trust,
+            KnownGoodFiles knownGood,
             Clock clock,
             RandomGenerator random) {}
 
@@ -160,6 +162,12 @@ final class UpCommand implements Callable<Integer> {
                 + (project.project().services().size() == 1 ? " service)" : " services)"));
         Map<String, ServiceState> states = supervisor.up().join();
         printer.summary(states);
+        if (states.values().stream().allMatch(UpCommand::up)) {
+            // A clean start: what `devdesk why` compares with the next time something breaks.
+            engine.knownGood().save(project.project(), engine.knownGood().take(project.project(), this::imageIds));
+        } else {
+            screen.println("Run devdesk why to see what changed since it last worked.");
+        }
         if (states.values().stream().noneMatch(ServiceState::isActive)) {
             Runtime.getRuntime().removeShutdownHook(onCtrlC); // nothing runs, so there's nothing to stop
             supervisor.close();
@@ -170,6 +178,18 @@ final class UpCommand implements Callable<Integer> {
         }
         new CountDownLatch(1).await(); // keep running until Ctrl+C
         return 0;
+    }
+
+    private static boolean up(ServiceState s) {
+        return s instanceof ServiceState.Healthy
+                || s instanceof ServiceState.Running
+                || s instanceof ServiceState.Completed;
+    }
+
+    private Map<String, String> imageIds(java.util.Collection<String> images) {
+        return engine.docker().get() instanceof DockerConnection.Result.Connected c
+                ? c.runtime().imageIds(images)
+                : Map.of();
     }
 
     private void stopAll(ProjectSupervisor supervisor) {

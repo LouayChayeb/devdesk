@@ -238,6 +238,20 @@ final class ApiServer {
             config.routes.get("/api/v1/project/startups", ctx -> answer(ctx, session.startups()));
             // "It worked yesterday": what changed since the project last started cleanly.
             config.routes.get("/api/v1/project/changes", ctx -> answer(ctx, changes.changes()));
+            // The same changes ranked against what fails now: the verdict.
+            config.routes.get("/api/v1/project/verdict", ctx -> answer(ctx, changes.verdict()));
+            // "Prove it": replays the previous and current image in throwaway containers (up to ~30 s).
+            config.routes.post("/api/v1/project/verdict/prove", ctx -> {
+                Map<?, ?> body = ctx.bodyAsClass(Map.class);
+                if (!(body.get("image") instanceof String image) || image.isBlank()) {
+                    answer(
+                            ctx,
+                            new EngineSession.Answer(
+                                    400, ApiJson.error("say which image: {\"image\": \"postgres:latest\"}")));
+                    return;
+                }
+                answer(ctx, changes.prove(image));
+            });
             // One zip with states, findings, logs, timeline and settings, secrets taken out.
             config.routes.post("/api/v1/project/bundle", ctx -> answer(ctx, bundle.write(ctx.bodyAsClass(Map.class))));
             // The traffic recorder: record the calls to a service through a stand-in port, then replay them.
