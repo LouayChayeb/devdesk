@@ -11,3 +11,6 @@ build/
 *.iml
 .vscode/
 out/
+
+# Python bytecode cache (created when the examples run)
+__pycache__/
