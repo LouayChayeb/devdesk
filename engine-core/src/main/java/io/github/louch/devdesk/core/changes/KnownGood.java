@@ -78,7 +78,7 @@ public record KnownGood(
                 out.add(new Change(Kind.TOOL, tool, "tool", tool, a + " → " + b));
             }
         }
-        out.addAll(yaml(then.devdeskYaml, now.devdeskYaml));
+        yamlChange(then.devdeskYaml, now.devdeskYaml).ifPresent(out::add);
         for (String file : union(then.envFiles.keySet(), now.envFiles.keySet())) {
             Map<String, String> a = then.envFiles.get(file);
             Map<String, String> b = now.envFiles.get(file);
@@ -153,6 +153,32 @@ public record KnownGood(
             }
         }
         return out;
+    }
+
+    /** At most this many changed lines are spelled out in one devdesk.yaml change. */
+    private static final int YAML_LINES_SHOWN = 6;
+
+    /**
+     * One edit of devdesk.yaml is one change, not one per line: "3 lines changed", with the lines (secrets masked) in
+     * the detail. The subject holds every changed line, for the verdict to match with services and ports.
+     */
+    static Optional<Change> yamlChange(String then, String now) {
+        List<Change> lines = yaml(then, now);
+        if (lines.isEmpty()) {
+            return Optional.empty();
+        }
+        List<String> shown = lines.stream()
+                .map(c ->
+                        (c.what().equals("removed") ? "- " : "+ ") + c.detail().strip())
+                .toList();
+        String detail = String.join(" · ", shown.subList(0, Math.min(YAML_LINES_SHOWN, shown.size())))
+                + (shown.size() > YAML_LINES_SHOWN ? " · … " + (shown.size() - YAML_LINES_SHOWN) + " more" : "");
+        return Optional.of(new Change(
+                Kind.CONFIG,
+                String.join("\n", lines.stream().map(Change::detail).toList()),
+                "devdesk.yaml",
+                lines.size() == 1 ? "1 line changed" : lines.size() + " lines changed",
+                detail));
     }
 
     private static List<String> lines(String text) {

@@ -193,7 +193,7 @@ public final class ImageProof {
                                 : new ProbeResult.Failed("still running");
                     default -> probe.probe(pointed.get(), Path.of("/"), Map.of());
                 };
-                if (p instanceof ProbeResult.Passed) {
+                if (p instanceof ProbeResult.Passed && confirmed(r, pointed.get())) {
                     return new Trial(true, "check passed: " + p.detail());
                 }
                 last = p.detail();
@@ -208,6 +208,29 @@ public final class ImageProof {
         } finally {
             replay.remove(r);
         }
+    }
+
+    /** How many more times a pass must repeat, the replica still running, before it counts. */
+    private static final int CONFIRMATIONS = 2;
+
+    /**
+     * A single pass can be a fluke: Docker's port forwarder accepts a TCP connection for a moment even when the
+     * container is already exiting. So a pass counts only if the replica is still running and passes again, twice.
+     */
+    private boolean confirmed(ImageReplay.Replica r, HealthCheckSpec check) throws InterruptedException {
+        if (check instanceof HealthCheckSpec.ProcessAlive) {
+            return true; // its pass already means "still running at the end"
+        }
+        for (int i = 0; i < CONFIRMATIONS; i++) {
+            Thread.sleep(poll);
+            ProbeResult again = check instanceof HealthCheckSpec.Docker
+                    ? replay.dockerHealth(r)
+                    : probe.probe(check, Path.of("/"), Map.of());
+            if (!replay.running(r) || !(again instanceof ProbeResult.Passed)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private String output(ImageReplay.Replica r) {

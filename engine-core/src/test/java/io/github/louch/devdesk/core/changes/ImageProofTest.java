@@ -30,6 +30,10 @@ class ImageProofTest {
         final List<String> started = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<String> removed = new java.util.concurrent.CopyOnWriteArrayList<>();
         final Map<String, String> imageOf = new ConcurrentHashMap<>();
+        /** Images whose replica answers one probe, then is gone (Docker's forwarder fooling a TCP check). */
+        final Set<String> dying = ConcurrentHashMap.newKeySet();
+
+        final Set<String> probed = ConcurrentHashMap.newKeySet();
         private final AtomicInteger next = new AtomicInteger(40000);
 
         @Override
@@ -48,7 +52,7 @@ class ImageProofTest {
 
         @Override
         public boolean running(Replica r) {
-            return true;
+            return !(dying.contains(imageOf.get(r.id())) && probed.contains(r.id()));
         }
 
         @Override
@@ -77,7 +81,8 @@ class ImageProofTest {
             probedPorts.add(port);
         }
         String image = replay.imageOf.get("replica-" + port);
-        return replay.good.contains(image)
+        replay.probed.add("replica-" + port);
+        return replay.good.contains(image) || replay.dying.contains(image)
                 ? new ProbeResult.Passed("connected")
                 : new ProbeResult.Failed("connection refused");
     };
@@ -99,6 +104,17 @@ class ImageProofTest {
         assertThat(replay.removed).hasSize(2);
         // The real port 5432 is never probed: only the replicas' random ports.
         assertThat(probedPorts).isNotEmpty().doesNotContain(5432);
+    }
+
+    @Test
+    void aSinglePassFromAReplicaThatThenExitsDoesNotCount() throws Exception {
+        replay.present.add(OLD);
+        replay.good.add(OLD);
+        replay.dying.add(NEW); // its check "passes" once, then the container is gone
+
+        var r = proof.prove(db, OLD, Map.of(), Duration.ofMillis(300));
+
+        assertThat(r.outcome()).isEqualTo(ImageProof.Outcome.PROVEN);
     }
 
     @Test

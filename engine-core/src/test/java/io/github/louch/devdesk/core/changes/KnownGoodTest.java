@@ -57,5 +57,13 @@ class KnownGoodTest {
         assertThat(c).anySatisfy(x -> assertThat(x.what()).isEqualTo(".env: OLD"));
         assertThat(c).anySatisfy(x -> assertThat(x.detail()).contains("command: npm run start:prod"));
         assertThat(c.toString()).doesNotContain("old-secret", "new-secret");
+        // One edit of devdesk.yaml is one change in the verdict, however many lines it touched.
+        assertThat(c)
+                .filteredOn(x -> x.area().equals("devdesk.yaml"))
+                .singleElement()
+                .satisfies(x -> {
+                    assertThat(x.what()).endsWith("lines changed");
+                    assertThat(x.detail()).contains("- ").contains("+ ");
+                });
     }
 }
