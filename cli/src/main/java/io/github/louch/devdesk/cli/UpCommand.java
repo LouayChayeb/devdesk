@@ -165,7 +165,8 @@ final class UpCommand implements Callable<Integer> {
         if (states.values().stream().allMatch(UpCommand::up)) {
             // A clean start: what `devdesk why` compares with the next time something breaks.
             engine.knownGood().save(project.project(), engine.knownGood().take(project.project(), this::imageIds));
-        } else {
+        } else if (engine.knownGood().load(project.project()).isPresent()) {
+            // Only when there's a clean start to compare with; otherwise the hint would lead nowhere.
             screen.println("Run devdesk why to see what changed since it last worked.");
         }
         if (states.values().stream().noneMatch(ServiceState::isActive)) {
