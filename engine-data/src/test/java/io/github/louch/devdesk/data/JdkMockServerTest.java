@@ -41,6 +41,10 @@ class JdkMockServerTest {
             assertThat(ok.headers().firstValue("Access-Control-Allow-Origin")).contains("*");
             assertThat(miss.statusCode()).isEqualTo(404);
             assertThat(miss.body()).contains("GET /orders/:id");
+            // The server logs a request right after answering it, so the client can be a moment ahead.
+            for (int i = 0; i < 100 && hits.size() < 2; i++) {
+                Thread.sleep(20);
+            }
             assertThat(hits)
                     .extracting(h -> h.method() + " " + h.target() + " " + h.status() + " " + h.route())
                     .containsExactly("GET /orders/9 200 GET /orders/:id", "POST /nope 404 ");
