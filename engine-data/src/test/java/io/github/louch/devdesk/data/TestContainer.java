@@ -10,7 +10,10 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntPredicate;
 
-/** Any image in a throwaway container, its port published on a free host port. Skips the test without Docker. */
+/**
+ * Any image in a throwaway container, its port published on a free host port. Pulls the image when missing; skips
+ * the test only without Docker.
+ */
 final class TestContainer implements AutoCloseable {
 
     final int port;
@@ -35,7 +38,11 @@ final class TestContainer implements AutoCloseable {
             String label, String image, int containerPort, int hostPort, IntPredicate ready, String... env)
             throws InterruptedException {
         assumeTrue(run("docker", "info").isPresent(), "Docker is not available");
-        assumeTrue(run("docker", "image", "inspect", image).isPresent(), image + " isn't pulled on this machine");
+        if (run("docker", "image", "inspect", image).isEmpty()) {
+            // Pulled once (CI starts empty); a failed pull fails the test instead of silently skipping it.
+            run("docker", "pull", "-q", image)
+                    .orElseThrow(() -> new IllegalStateException("could not pull " + image + " (offline?)"));
+        }
         String name = "devdesk-test-" + label + "-" + ProcessHandle.current().pid();
         List<String> cmd = new ArrayList<>(List.of("docker", "run", "-d", "--rm", "--name", name));
         for (String e : env) {
@@ -51,8 +58,9 @@ final class TestContainer implements AutoCloseable {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(90);
         while (!ready.test(port)) {
             if (System.nanoTime() > deadline) {
+                String logs = run("docker", "logs", "--tail", "30", name).orElse("(no logs)");
                 run("docker", "rm", "-f", name);
-                throw new IllegalStateException(image + " wasn't ready after 90 s");
+                throw new IllegalStateException(image + " wasn't ready after 90 s. Its last output:\n" + logs);
             }
             Thread.sleep(500);
         }

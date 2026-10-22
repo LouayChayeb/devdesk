@@ -28,8 +28,7 @@ class MongoBrowserTest {
         run(
                         "docker",
                         "run",
-                        "-d",
-                        "--rm",
+                        "-d", // no --rm: if it crashes, its logs stay readable; stop() removes it
                         "--name",
                         NAME,
                         "-p",
@@ -51,7 +50,12 @@ class MongoBrowserTest {
                 break;
             } catch (DataException e) {
                 if (System.nanoTime() > deadline) {
-                    throw e;
+                    // Its own output says why (crashed, still initializing...): worth more than "connection refused".
+                    throw new IllegalStateException(
+                            "mongo:8 wasn't ready after 60 s. Its last output:\n"
+                                    + run("docker", "logs", "--tail", "30", NAME)
+                                            .orElse("(no logs: it exited)"),
+                            e);
                 }
                 Thread.sleep(500);
             }

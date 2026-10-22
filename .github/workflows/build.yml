@@ -23,5 +23,29 @@ jobs:
       #    and caches downloads so the next run is faster.
       - uses: gradle/actions/setup-gradle@v6
 
-      # 4. The same command you run locally: compile, test, format check, style check.
+      # 4. What some tests need that a fresh runner lacks: zsh (login-shell test) and a systemd user session
+      #    (process ownership through systemd scopes). Lingering starts the user's systemd manager.
+      - name: Give the tests zsh and a systemd user session
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q zsh
+          sudo loginctl enable-linger "$USER"
+          uid=$(id -u)
+          for i in $(seq 1 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR=/run/user/$uid systemd-run --user --scope --quiet true && echo "systemd user session works"
+
+      # 5. The same command you run locally: compile, test, format check, style check.
       - run: ./gradlew build
+
+      # 6. A skipped test proves nothing: fail if any was skipped.
+      - run: sh scripts/no-skipped-tests.sh
+
+      # 7. The desktop app's pages (Angular). The Tauri shell around them isn't built here.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci && npx ng build
+        working-directory: ui
