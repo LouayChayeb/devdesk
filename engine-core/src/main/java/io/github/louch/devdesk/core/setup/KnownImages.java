@@ -43,4 +43,24 @@ final class KnownImages {
         }
         return Optional.empty();
     }
+
+    /** The port a database image listens on by default, for one compose keeps on its own network. */
+    static Optional<Integer> usualPort(String image) {
+        if (DatabaseTargets.isPostgresImage(image)) {
+            return Optional.of(5432);
+        }
+        if (DatabaseTargets.isMysqlImage(image)) {
+            return Optional.of(3306);
+        }
+        if (DatabaseTargets.isRedisImage(image)) {
+            return Optional.of(6379);
+        }
+        if (DatabaseTargets.isMongoImage(image)) {
+            return Optional.of(27017);
+        }
+        if (image.matches("(.*/)?rabbitmq(:.*)?")) {
+            return Optional.of(5672);
+        }
+        return Optional.empty();
+    }
 }

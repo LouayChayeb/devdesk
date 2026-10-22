@@ -110,8 +110,11 @@ class ComposeImportTest {
     void whatCantBeMappedIsSaidNotDropped() {
         var web = card("web");
 
-        assertThat(web.ports()).isEmpty();
-        assertThat(web.notes()).hasSize(2).allSatisfy(n -> assertThat(n).contains("was skipped"));
+        // "80" alone (random host port in compose) becomes a fixed 80:80, said in a note; a range can't be mapped.
+        assertThat(web.ports()).containsExactly("80:80");
+        assertThat(web.notes()).hasSize(2);
+        assertThat(web.notes().get(0)).contains("random host port").contains("80:80");
+        assertThat(web.notes().get(1)).contains("8000-8001:8000-8001 was skipped");
         assertThat(web.command()).isEqualTo("nginx -g 'daemon off;'");
     }
 
@@ -120,6 +123,119 @@ class ComposeImportTest {
         var broken = ComposeImport.read("services: [", "x", "x", d -> Optional.empty());
 
         assertThat(broken.services()).isEmpty();
-        assertThat(broken.notes()).singleElement().asString().startsWith("docker-compose.yml could not be read");
+        assertThat(broken.notes()).singleElement().asString().startsWith(ComposeImport.UNREADABLE);
+    }
+
+    /** Umami's real compose file (trimmed): a database named like the app, and a healthcheck using $$. */
+    private static final String UMAMI = """
+            services:
+              umami:
+                image: ghcr.io/umami-software/umami:latest
+                ports: ["3000:3000"]
+                environment:
+                  DATABASE_URL: postgresql://umami:umami@db:5432/umami
+                depends_on:
+                  db:
+                    condition: service_healthy
+              db:
+                image: postgres:15-alpine
+                environment:
+                  POSTGRES_DB: umami
+                  POSTGRES_USER: umami
+                  POSTGRES_PASSWORD: umami
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+            """;
+
+    @Test
+    void aValueThatMerelyEqualsAServiceNameIsNotTreatedAsAnAddress() {
+        var umami = ComposeImport.read(UMAMI, "umami", "umami", dir -> Optional.empty());
+        var db = umami.services().stream()
+                .filter(s -> s.name().equals("db"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(db.environment()).containsEntry("POSTGRES_USER", "umami").containsEntry("POSTGRES_DB", "umami");
+        assertThat(db.notes()).noneMatch(n -> n.contains("compose name"));
+        // A real address still is one.
+        var app = umami.services().stream()
+                .filter(s -> s.name().equals("umami"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(app.notes()).anyMatch(n -> n.startsWith("DATABASE_URL reaches \"db\""));
+        assertThat(ComposeImport.reachesByName("REDIS_HOST", "cache", "cache")).isTrue();
+        assertThat(ComposeImport.reachesByName("POSTGRES_USER", "cache", "cache"))
+                .isFalse();
+    }
+
+    @Test
+    void composesDoubleDollarSurvivesTheImportAndTheWrittenFileIsValid() throws Exception {
+        var umami = ComposeImport.read(UMAMI, "umami", "umami", dir -> Optional.empty());
+        var db = umami.services().stream()
+                .filter(s -> s.name().equals("db"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(db.health().target()).contains("$${POSTGRES_USER}");
+
+        String yaml = SetupYaml.write(new SetupDraft("umami", List.of(), umami.services(), List.of()));
+        var project = io.github.louch.devdesk.core.config.ConfigParser.parse(
+                yaml, java.nio.file.Path.of("/work/umami"), Map.of(), f -> Optional.empty());
+        var check = (io.github.louch.devdesk.core.project.HealthCheckSpec.Command)
+                project.services().get("db").health();
+        // DevDesk turns $$ into $: the container's shell expands ${POSTGRES_USER}, as with compose.
+        assertThat(check.command()).contains("pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}");
+    }
+
+    @Test
+    void aDatabaseOnComposesOwnNetworkGetsItsUsualPortOnThisMachine() {
+        var r = ComposeImport.read("""
+                services:
+                  db:
+                    image: postgres:15-alpine
+                  vote:
+                    build: ./vote
+                    environment:
+                      DB_HOST: db
+                """, "voting", "voting", dir -> Optional.empty());
+        var db = r.services().stream()
+                .filter(s -> s.name().equals("db"))
+                .findFirst()
+                .orElseThrow();
+        var vote = r.services().stream()
+                .filter(s -> s.name().equals("vote"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(db.ports()).containsExactly("5432:5432");
+        assertThat(db.notes()).anyMatch(n -> n.contains("publishes its usual port 5432 on 127.0.0.1"));
+        assertThat(vote.environment()).containsEntry("DB_HOST", "127.0.0.1");
+    }
+
+    @Test
+    void aBuiltServiceUsesComposesCommandOverTheDockerfilesCmd() {
+        var r = ComposeImport.read(
+                """
+                services:
+                  worker:
+                    build: ./worker
+                    command: celery -A shop worker -l info
+                  web:
+                    build: ./web
+                """,
+                "shop",
+                "shop",
+                dir -> Optional.of(new ComposeImport.DetectedApp(
+                        "node server.js", Optional.of(80), Optional.empty(), dir + "/Dockerfile CMD", List.of())));
+        var worker = r.services().stream()
+                .filter(s -> s.name().equals("worker"))
+                .findFirst()
+                .orElseThrow();
+        var web = r.services().stream()
+                .filter(s -> s.name().equals("web"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(worker.command()).isEqualTo("celery -A shop worker -l info");
+        assertThat(web.command()).isEqualTo("node server.js");
     }
 }

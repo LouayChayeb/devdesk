@@ -11,7 +11,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Recognises how to start the app in one folder from its build files: package.json (Node), pom.xml or build.gradle
- * (Spring Boot, Quarkus) and manage.py (Django). Pure: it only reads file contents it is given.
+ * (Spring Boot, Quarkus), manage.py (Django), a FastAPI or Flask app, and, for a compose build folder, the
+ * Dockerfile's CMD. Pure: it only reads file contents it is given.
  */
 final class AppDetector {
 
@@ -32,7 +33,19 @@ final class AppDetector {
      */
     static Optional<ComposeImport.DetectedApp> detect(Function<String, Optional<String>> read, String dir) {
         Function<String, Optional<String>> here = file -> read.apply(dir.isEmpty() ? file : dir + "/" + file);
-        return node(here, dir).or(() -> java(here, dir)).or(() -> django(here, dir));
+        return node(here, dir)
+                .or(() -> java(here, dir))
+                .or(() -> django(here, dir))
+                .or(() -> python(here, dir));
+    }
+
+    /**
+     * For a folder compose builds an image from: what {@link #detect} finds, else the Dockerfile's own CMD, which says
+     * how the app starts (it then assumes the packages the image installs are installed here too).
+     */
+    static Optional<ComposeImport.DetectedApp> detectBuild(Function<String, Optional<String>> read, String dir) {
+        Function<String, Optional<String>> here = file -> read.apply(dir.isEmpty() ? file : dir + "/" + file);
+        return detect(read, dir).or(() -> dockerfile(here, dir));
     }
 
     /** Whether package.json says it's a monorepo root: the real apps are in its workspaces, not here. */
@@ -51,7 +64,7 @@ final class AppDetector {
         JsonNode scripts = pkg.get().path("scripts");
         Optional<String> script = NODE_SCRIPTS.stream().filter(scripts::has).findFirst();
         if (script.isEmpty()) {
-            return Optional.empty();
+            return nodeMain(read, dir, pkg.get());
         }
         String body = scripts.path(script.get()).asString("");
         // Each package manager keeps its own lock file; running another one would install different versions.
@@ -90,6 +103,110 @@ final class AppDetector {
                 webPage ? port.map(p -> "http://127.0.0.1:" + p + "/") : Optional.empty(),
                 where(dir, "package.json") + " script \"" + script.get() + "\"",
                 notes));
+    }
+
+    private static final Pattern LISTEN = Pattern.compile("(?:listen\\(|PORT\\s*\\|\\|\\s*)(\\d{2,5})");
+
+    /** No dev script: "main" in package.json (or server.js / index.js / app.js) run with node. */
+    private static Optional<ComposeImport.DetectedApp> nodeMain(
+            Function<String, Optional<String>> read, String dir, JsonNode pkg) {
+        String main = pkg.path("main").asString("");
+        Optional<String> file = (main.isBlank() ? List.of("server.js", "index.js", "app.js") : List.of(main))
+                .stream().filter(f -> read.apply(f).isPresent()).findFirst();
+        if (file.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<Integer> port = read.apply(".env")
+                .flatMap(env -> first(ENV_PORT, env))
+                .or(() -> read.apply(file.get()).flatMap(code -> first(LISTEN, code)));
+        boolean installed = read.apply("node_modules/.package-lock.json").isPresent();
+        return Optional.of(new ComposeImport.DetectedApp(
+                "node " + file.get(),
+                port,
+                Optional.empty(),
+                where(dir, "package.json") + (main.isBlank() ? " (" + file.get() + ")" : " \"main\""),
+                installed || pkg.path("dependencies").isEmpty()
+                        ? List.of()
+                        : List.of("Its packages aren't installed yet: run \"npm install\" in ./" + dir
+                                + " once, or the start command will fail.")));
+    }
+
+    private static final Pattern FASTAPI = Pattern.compile("(?m)^(\\w+)\\s*=\\s*FastAPI\\(");
+    private static final Pattern FLASK = Pattern.compile("(?m)^(\\w+)\\s*=\\s*Flask\\(");
+
+    /** A FastAPI or Flask app in main.py or app.py, whose packages requirements.txt or pyproject.toml list. */
+    private static Optional<ComposeImport.DetectedApp> python(Function<String, Optional<String>> read, String dir) {
+        String deps = read.apply("requirements.txt").orElse("")
+                + read.apply("pyproject.toml").orElse("");
+        String install =
+                read.apply("requirements.txt").isPresent() ? "pip install -r requirements.txt" : "pip install -e .";
+        for (String file : List.of("main.py", "app.py")) {
+            Optional<String> code = read.apply(file);
+            if (code.isEmpty()) {
+                continue;
+            }
+            String module = file.replace(".py", "");
+            Matcher fast = FASTAPI.matcher(code.get());
+            if (fast.find() && deps.toLowerCase().contains("fastapi")) {
+                return Optional.of(new ComposeImport.DetectedApp(
+                        "uvicorn " + module + ":" + fast.group(1) + " --reload --host 127.0.0.1 --port 8000",
+                        Optional.of(8000),
+                        Optional.empty(),
+                        where(dir, file) + " (FastAPI)",
+                        List.of("It needs its packages: run \"" + install + "\" in ./" + dir
+                                + " once (in a virtualenv).")));
+            }
+            Matcher flask = FLASK.matcher(code.get());
+            if (flask.find() && deps.toLowerCase().contains("flask")) {
+                return Optional.of(new ComposeImport.DetectedApp(
+                        "flask --app " + module + " run --port 5000",
+                        Optional.of(5000),
+                        Optional.empty(),
+                        where(dir, file) + " (Flask)",
+                        List.of("It needs its packages: run \"" + install + "\" in ./" + dir
+                                + " once (in a virtualenv).")));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static final Pattern CMD = Pattern.compile("(?im)^\\s*CMD\\s+(.+)$");
+    private static final Pattern EXPOSE = Pattern.compile("(?im)^\\s*EXPOSE\\s+(\\d{2,5})");
+
+    /** The Dockerfile's last CMD, exec form ["node", "server.js"] or shell form, and its first EXPOSE as the port. */
+    private static Optional<ComposeImport.DetectedApp> dockerfile(Function<String, Optional<String>> read, String dir) {
+        Optional<String> file = read.apply("Dockerfile");
+        if (file.isEmpty()) {
+            return Optional.empty();
+        }
+        Matcher m = CMD.matcher(file.get());
+        String cmd = null;
+        while (m.find()) {
+            cmd = m.group(1).strip(); // the last CMD wins, as in Docker
+        }
+        if (cmd == null) {
+            return Optional.empty();
+        }
+        if (cmd.startsWith("[")) {
+            Optional<JsonNode> words = json(cmd);
+            if (words.isEmpty() || !words.get().isArray()) {
+                return Optional.empty();
+            }
+            List<String> parts = new java.util.ArrayList<>();
+            words.get().forEach(w -> parts.add(quoteIfNeeded(w.asString(""))));
+            cmd = String.join(" ", parts);
+        }
+        return Optional.of(new ComposeImport.DetectedApp(
+                cmd,
+                first(EXPOSE, file.get()),
+                Optional.empty(),
+                where(dir, "Dockerfile") + " CMD",
+                List.of("Taken from the Dockerfile's CMD: it assumes what the image installs (packages, tools) is"
+                        + " installed here too. Check it before starting.")));
+    }
+
+    private static String quoteIfNeeded(String word) {
+        return word.matches("[\\w@%+=:,./-]+") ? word : "'" + word.replace("'", "'\\''") + "'";
     }
 
     private static Optional<Integer> defaultNodePort(String script) {

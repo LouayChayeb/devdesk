@@ -78,12 +78,18 @@ public final class FolderScan {
                     folder.read(file).orElseThrow(),
                     project,
                     folder.name(),
-                    dir -> AppDetector.detect(folder::read, dir));
+                    dir -> AppDetector.detectBuild(folder::read, dir));
             services.addAll(compose.services());
             envFiles.addAll(compose.envFiles());
-            notes.addAll(compose.notes());
-            found.add(file + ": " + compose.services().size() + " service"
-                    + (compose.services().size() == 1 ? "" : "s"));
+            Optional<String> unreadable = compose.notes().stream()
+                    .filter(n -> n.startsWith(ComposeImport.UNREADABLE))
+                    .findFirst();
+            compose.notes().forEach(n -> notes.add(n.startsWith(ComposeImport.UNREADABLE) ? file + " " + n : n));
+            // "0 services" would hide the reason: say it was unreadable, and why, on the first screen.
+            found.add(unreadable
+                    .map(n -> file + ": " + n)
+                    .orElse(file + ": " + compose.services().size() + " service"
+                            + (compose.services().size() == 1 ? "" : "s")));
             if (folder.read(file.replaceFirst("\\.ya?ml$", ".override.yml")).isPresent()) {
                 notes.add("docker-compose.override.yml was not read: check its changes by hand.");
             }

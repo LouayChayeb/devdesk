@@ -33,6 +33,9 @@ public final class ComposeImport {
     /** The imported cards, the .env files compose reads, and notes for the whole file. */
     public record Result(List<SetupDraft.Service> services, List<String> envFiles, List<String> notes) {}
 
+    /** Starts the note when the file isn't valid YAML; the scan puts the file's name in front. */
+    static final String UNREADABLE = "could not be read, so nothing was imported from it: ";
+
     private static final Pattern DURATION = Pattern.compile("\\d+(ms|s|m|h)");
     private static final Pattern PORT = Pattern.compile("(?:(\\d+\\.\\d+\\.\\d+\\.\\d+):)?(\\d+)(?::(\\d+))?(/tcp)?");
 
@@ -40,6 +43,9 @@ public final class ComposeImport {
     private final String composeProject;
     private final Function<String, Optional<DetectedApp>> detectApp;
     private final List<String> notes = new ArrayList<>();
+    /** Services whose usual port DevDesk publishes because compose kept them on its own network. */
+    private final Map<String, Integer> addedPorts = new LinkedHashMap<>();
+
     private final Set<String> envFiles = new LinkedHashSet<>();
 
     private ComposeImport(String project, String composeProject, Function<String, Optional<DetectedApp>> detectApp) {
@@ -59,7 +65,7 @@ public final class ComposeImport {
         try {
             top = YamlReader.read(yaml);
         } catch (ConfigException e) {
-            return new Result(List.of(), List.of(), List.of("docker-compose.yml could not be read: " + e.getMessage()));
+            return new Result(List.of(), List.of(), List.of(UNREADABLE + e.getMessage()));
         }
         String composeProject = entry(top, "name")
                 .flatMap(ComposeImport::text)
@@ -83,6 +89,16 @@ public final class ComposeImport {
         // Container port → host port per service, to point commands at containers through the host.
         Map<String, Map<Integer, Integer>> published = new LinkedHashMap<>();
         raw.forEach((name, s) -> published.put(name, portMap(ports(s, name, new ArrayList<>()))));
+        // A database compose keeps on its own network (no ports:) can't be reached from apps on this machine:
+        // publish its usual port on 127.0.0.1, said in a note on its card.
+        raw.forEach((name, s) -> {
+            Optional<Integer> usual =
+                    entry(s, "image").flatMap(ComposeImport::text).flatMap(KnownImages::usualPort);
+            if (published.get(name).isEmpty() && usual.isPresent()) {
+                published.put(name, Map.of(usual.get(), usual.get()));
+                addedPorts.put(name, usual.get());
+            }
+        });
 
         List<SetupDraft.Service> services = new ArrayList<>();
         raw.forEach((name, s) -> services.add(service(serviceName(name), s, published)));
@@ -118,6 +134,19 @@ public final class ComposeImport {
             String cleaned = buildDir.get().replaceFirst("^\\./", "").replaceFirst("/$", "");
             String dir = cleaned.equals(".") ? "" : cleaned;
             Optional<DetectedApp> app = detectApp.apply(dir);
+            Optional<String> composeCommand = entry(s, "command").map(ComposeImport::commandLine);
+            if (composeCommand.isPresent()
+                    && app.map(a -> a.origin().endsWith("Dockerfile CMD")).orElse(true)) {
+                // Compose's command overrides the Dockerfile's CMD, so it's the more faithful of the two.
+                app = Optional.of(new DetectedApp(
+                        composeCommand.get(),
+                        app.flatMap(DetectedApp::port),
+                        Optional.empty(),
+                        "its command: in docker-compose.yml",
+                        List.of("It's the command compose runs inside the image: it assumes what the image installs"
+                                + " is installed here too, and compose names in it (like db:5432) need 127.0.0.1"
+                                + " and the published port.")));
+            }
             List<Integer> hostPorts = ports.stream()
                     .map(p -> portMap(List.of(p)).values().stream().findFirst().orElse(-1))
                     .filter(p -> p > 0)
@@ -162,6 +191,12 @@ public final class ComposeImport {
                     + "\"docker compose build " + name + "\" once, then DevDesk uses the result.");
         }
         warnAboutServiceNames(name, env, published.keySet(), cardNotes);
+        Integer added = addedPorts.get(name);
+        if (added != null) {
+            ports = List.of(added + ":" + added);
+            cardNotes.add("docker-compose.yml keeps it on its own network (no ports:). DevDesk publishes its usual"
+                    + " port " + added + " on 127.0.0.1, so the apps on your machine can reach it.");
+        }
         String command = entry(s, "command").map(ComposeImport::commandLine).orElse("");
         String container = ContainerRuntime.containerName(project, name);
         return new SetupDraft.Service(
@@ -197,6 +232,14 @@ public final class ComposeImport {
                                                     + pub + ":" + t))
                             : text(item);
                     Matcher m = spec.map(PORT::matcher).filter(Matcher::matches).orElse(null);
+                    if (m != null && m.group(1) == null && m.group(3) == null) {
+                        // "8080" alone: compose picks a random host port. DevDesk needs a fixed one: the same number.
+                        out.add(m.group(2) + ":" + m.group(2));
+                        cardNotes.add("Port " + m.group(2) + ": compose publishes it on a random host port; DevDesk"
+                                + " uses " + m.group(2) + ":" + m.group(2) + " (a fixed one). Change it if "
+                                + m.group(2) + " is taken.");
+                        return;
+                    }
                     if (m == null || m.group(3) == null) {
                         cardNotes.add(
                                 "Port " + spec.orElse("?") + " was skipped: DevDesk needs a fixed \"host:container\" "
@@ -353,7 +396,8 @@ public final class ComposeImport {
                             "(?<![\\w.-])" + Pattern.quote(name) + ":" + port.getKey() + "(?!\\d)",
                             "127.0.0.1:" + port.getValue());
                 }
-                if (v.equals(name)) {
+                // Only for a setting that names a host: POSTGRES_USER: umami is a user name, not the "umami" service.
+                if (v.equals(name) && hostSetting(key)) {
                     v = "127.0.0.1";
                 }
             }
@@ -370,15 +414,35 @@ public final class ComposeImport {
             String self, Map<String, String> env, Set<String> services, List<String> cardNotes) {
         for (var e : env.entrySet()) {
             for (String other : services) {
-                if (!other.equals(self)
-                        && Pattern.compile("(?<![\\w.-])" + Pattern.quote(other) + "(:\\d+|$|/)")
-                                .matcher(e.getValue())
-                                .find()) {
+                if (!other.equals(self) && reachesByName(e.getKey(), e.getValue(), other)) {
                     cardNotes.add(e.getKey() + " reaches \"" + other + "\" by its compose name. DevDesk's containers "
                             + "don't share a network: use host.docker.internal and " + other + "'s published port.");
                 }
             }
         }
+    }
+
+    /** Settings whose value is a host name: DB_HOST, REDIS_URL, KAFKA_BOOTSTRAP_SERVERS, API_ENDPOINT... */
+    private static final Pattern HOST_SETTING =
+            Pattern.compile("(?i).*(HOST|HOSTNAME|HOSTS|SERVER|SERVERS|ADDR|ADDRESS|URL|URI|DSN|ENDPOINT|BROKERS?)$");
+
+    static boolean hostSetting(String key) {
+        return HOST_SETTING.matcher(key).matches();
+    }
+
+    /**
+     * Does this value reach the compose service {@code other} by name? "db:5432", "postgres://u@db/x" and "http://db/"
+     * do; a bare "db" only for a host setting, since POSTGRES_DB: umami names a database, not the umami service.
+     */
+    static boolean reachesByName(String key, String value, String other) {
+        String name = Pattern.quote(other);
+        boolean inAddress = Pattern.compile("(?<![\\w.-])" + name + "(:\\d+|/)")
+                        .matcher(value)
+                        .find()
+                || Pattern.compile("(://|@)" + name + "(?![\\w.-])")
+                        .matcher(value)
+                        .find();
+        return inAddress || (value.strip().equals(other) && hostSetting(key));
     }
 
     private static String commandLine(YamlNode node) {

@@ -125,4 +125,43 @@ class FolderScanTest {
         assertThat(result.draft().services()).isEmpty();
         assertThat(result.draft().notes()).singleElement().asString().contains("Add database");
     }
+
+    @Test
+    void anUnreadableComposeFileSaysWhyInsteadOfZeroServices() {
+        // A real project had a key twice in one service; Compose itself refuses that file too.
+        var folder = new FakeFolder(
+                "Shop", Map.of("docker-compose.yaml", "services:\n  app:\n    image: x\n    image: y\n"));
+
+        var result = FolderScan.scan(folder, "/home/me/shop", List.of());
+
+        assertThat(result.found())
+                .anyMatch(f -> f.startsWith("docker-compose.yaml: could not be read") && !f.contains("0 services"));
+        assertThat(result.draft().notes()).anyMatch(n -> n.startsWith("docker-compose.yaml could not be read"));
+    }
+
+    @Test
+    void builtAppsGetACommandFromNodeMainFlaskOrTheDockerfile() {
+        // Like dockersamples/example-voting-app: a Flask app, a Node app without a dev script, and a .NET worker.
+        var folder = new FakeFolder(
+                "voting",
+                Map.of(
+                        "docker-compose.yml",
+                                "services:\n  vote:\n    build: ./vote\n  result:\n    build: ./result\n"
+                                        + "  worker:\n    build: ./worker\n",
+                        "vote/app.py", "from flask import Flask\napp = Flask(__name__)\n",
+                        "vote/requirements.txt", "Flask\nRedis\n",
+                        "result/package.json", "{\"main\": \"server.js\", \"dependencies\": {\"express\": \"4\"}}",
+                        "result/server.js", "server.listen(4000)\n",
+                        "worker/Dockerfile", "FROM mcr.microsoft.com/dotnet/sdk\nCMD [\"dotnet\", \"Worker.dll\"]\n"));
+
+        var services =
+                FolderScan.scan(folder, "/home/me/voting", List.of()).draft().services();
+        Map<String, String> commands = new java.util.LinkedHashMap<>();
+        services.forEach(s -> commands.put(s.name(), s.command()));
+
+        assertThat(commands)
+                .containsEntry("vote", "flask --app app run --port 5000")
+                .containsEntry("result", "node server.js")
+                .containsEntry("worker", "dotnet Worker.dll");
+    }
 }
