@@ -1,0 +1,1 @@
+{ "name": "fresh-api", "private": true, "scripts": { "dev": "node server.js" }, "dependencies": { "is-number": "^7.0.0" } }

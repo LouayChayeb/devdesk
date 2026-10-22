@@ -1,0 +1,144 @@
+# A "real-size" project: 3 Docker containers + 8 native services, with a one-shot migration step.
+# Needs Docker and python3 only (no pip installs).
+#
+#   gateway :18000 ──► web :18300, api :18080, auth :18081
+#   api ──► postgres, redis        auth ──► postgres        admin ──► api
+#   worker ──► redis, mailpit       scheduler ──► api (calls it every 5 s)
+#   migrate runs once after postgres is ready; api and auth wait until it completed successfully.
+#
+# Try:   devdesk trust   then   devdesk up      (or open this folder in the app)
+# Then:  open http://127.0.0.1:18000 (the gateway) and http://127.0.0.1:58026 (mailpit's inbox: the worker sends mail)
+version: 1
+name: full-stack
+
+services:
+  # ---- containers ----
+  postgres:
+    container:
+      image: postgres:18.1
+      ports: ["55440:5432"]
+      environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: shop }
+      volumes: ["devdesk-full-stack-pgdata:/var/lib/postgresql"]
+    ports: [55440]
+    # Asks Postgres itself (a TCP check would pass too early: Docker's port forwarder accepts before Postgres is up).
+    health:
+      type: command
+      command: docker exec devdesk-full-stack-postgres pg_isready -h 127.0.0.1 -U postgres
+      start_period: 40s
+
+  redis:
+    container:
+      image: redis:8-alpine
+      ports: ["56380:6379"]
+    ports: [56380]
+    health:
+      type: command
+      command: docker exec devdesk-full-stack-redis redis-cli ping
+      start_period: 20s
+
+  mailpit:
+    container:
+      image: axllent/mailpit:latest
+      ports: ["58026:8025", "51026:1025"]
+      # Skip the reverse-DNS lookup of each SMTP client: in WSL/Docker it times out and delays every mail by 10 s.
+      environment: { MP_SMTP_DISABLE_RDNS: "true" }
+    ports: [58026, 51026]
+    health: { type: http, url: http://127.0.0.1:58026/readyz, start_period: 20s }
+
+  # ---- one-shot ----
+  migrate:
+    command: python3 migrate.py
+    depends_on:
+      postgres: { condition: healthy }
+    environment: { PG_PORT: "55440" }
+
+  # ---- backend ----
+  api:
+    command: python3 api.py
+    # Edit api.py (or pg.py, which it imports) and save: DevDesk restarts api by itself.
+    watch: [api.py, pg.py]
+    depends_on:
+      migrate: { condition: completed_successfully }
+      redis: { condition: healthy }
+    ports: [18080]
+    environment: { PORT: "18080", PG_PORT: "55440", REDIS_PORT: "56380", REDIS_POOL: "4" }
+    health: { type: http, url: http://127.0.0.1:18080/health }
+    restart: on-failure
+
+  auth:
+    command: python3 auth.py
+    depends_on:
+      migrate: { condition: completed_successfully }
+    ports: [18081]
+    environment: { PORT: "18081", PG_PORT: "55440", JWT_SECRET: "dev-only-not-a-real-secret" }
+    health: { type: http, url: http://127.0.0.1:18081/health }
+    restart: on-failure
+
+  worker:
+    command: python3 worker.py
+    depends_on:
+      redis: { condition: healthy }
+      mailpit: { condition: healthy }
+      api: { condition: started }
+    environment: { REDIS_PORT: "56380", SMTP_PORT: "51026" }
+    restart: on-failure
+
+  scheduler:
+    command: python3 scheduler.py
+    depends_on:
+      api: { condition: healthy }
+    environment: { API: "http://127.0.0.1:18080" }
+    restart: always
+
+  # ---- frontends ----
+  web:
+    command: python3 -m http.server 18300 --bind 127.0.0.1 --directory web
+    ports: [18300]
+    depends_on:
+      api: { condition: healthy }
+      auth: { condition: healthy }
+    health: { type: http, url: http://127.0.0.1:18300/ }
+
+  admin:
+    command: python3 -m http.server 18301 --bind 127.0.0.1 --directory admin
+    ports: [18301]
+    depends_on: [api]
+    health: { type: http, url: http://127.0.0.1:18301/ }
+
+  gateway:
+    command: python3 gateway.py
+    depends_on:
+      web: { condition: healthy }
+      api: { condition: healthy }
+      auth: { condition: healthy }
+    ports: [18000]
+    environment: { PORT: "18000" }
+    health: { type: http, url: http://127.0.0.1:18000/health }
+
+# Tasks: one-off commands, as buttons above the services list. "needs" are started first if they aren't running.
+tasks:
+  seed:
+    command: python3 seed.py
+    needs: [migrate]
+    description: Add 5 demo orders
+  count-orders:
+    command: docker exec devdesk-full-stack-postgres psql -U postgres -d shop -tAc "select count(*) from orders"
+    needs: [postgres]
+    description: How many orders the database has
+  reset-redis:
+    command: docker exec devdesk-full-stack-redis redis-cli flushall
+    needs: [redis]
+    description: Delete every Redis key (the counters start again from 0)
+    confirm: This deletes every key in Redis.
+  check-python: python3 -m py_compile api.py auth.py gateway.py migrate.py pg.py scheduler.py seed.py worker.py
+
+# Settings profiles: pick one in the app's header (while stopped). Only settings change, the services stay the same.
+profiles:
+  # The api with a single Redis connection, to see what it does under the scheduler's load.
+  small-pool:
+    services:
+      api: { environment: { REDIS_POOL: "1" } }
+  # Mails from the worker go to a second, empty-looking SMTP port: the worker then fails to send (try Diagnosis).
+  broken-mail:
+    services:
+      worker: { environment: { SMTP_PORT: "51099" } }

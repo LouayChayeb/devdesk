@@ -1,0 +1,22 @@
+# Looks like a project just cloned from git: no .env, no node_modules. Try DevDesk's "Set up" on it:
+# it creates .env from .env.example, runs npm install, downloads postgres:18 and runs "migrate" once.
+# To try again from scratch: rm -rf .env api/node_modules api/package-lock.json
+version: 1
+name: fresh-clone
+env_files: [.env]
+services:
+  db:
+    container:
+      image: postgres:18
+      ports: ["55460:5432"]
+      environment: { POSTGRES_PASSWORD: "${DB_PASSWORD}" }
+    health: { type: command, command: docker exec devdesk-fresh-clone-db pg_isready -h 127.0.0.1, start_period: 40s }
+  migrate:
+    command: node migrate.js
+    directory: api
+    depends_on: { db: { condition: healthy } }
+  api:
+    command: npm run dev
+    directory: api
+    ports: [3170]
+    depends_on: { migrate: { condition: completed_successfully } }

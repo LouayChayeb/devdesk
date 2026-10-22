@@ -1,0 +1,41 @@
+# A small compose project to try DevDesk's "Add project" wizard on (it has no devdesk.yaml on purpose).
+# Needs Docker and node only (no npm install: the two apps use Node's built-in modules).
+#   docker compose up      still works as usual
+#   DevDesk: Add project folder → this folder → the wizard drafts a devdesk.yaml from this file
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: shop
+    ports: ["55450:5432"]
+    volumes: [pgdata:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      start_period: 30s
+
+  cache:
+    image: redis:8-alpine
+    ports: ["56390:6379"]
+
+  api:
+    build: ./api
+    environment:
+      PORT: "3100"
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD}@db:5432/shop
+      REDIS_URL: redis://cache:6379
+    ports: ["3100:3100"]
+    depends_on:
+      db: { condition: service_healthy }
+      cache: { condition: service_started }
+
+  web:
+    build: ./web
+    environment:
+      PORT: "3200"
+      API_URL: http://api:3100
+    ports: ["3200:3200"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
