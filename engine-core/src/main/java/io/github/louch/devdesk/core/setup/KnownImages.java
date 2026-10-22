@@ -24,14 +24,18 @@ final class KnownImages {
         }
         if (DatabaseTargets.isMysqlImage(image)) {
             // mysqladmin answers "mysqld is alive" even when the password is wrong: enough to know it's up.
-            return Optional.of(SetupDraft.Health.command(exec + "mysqladmin ping -h 127.0.0.1 --silent", "60s"));
+            // The first start creates the system tables: MySQL 9 took over a minute for that on a real project.
+            return Optional.of(SetupDraft.Health.command(exec + "mysqladmin ping -h 127.0.0.1 --silent", "120s"));
         }
         if (DatabaseTargets.isRedisImage(image)) {
             return Optional.of(SetupDraft.Health.command(exec + "redis-cli ping", "20s"));
         }
         if (DatabaseTargets.isMongoImage(image)) {
-            return Optional.of(
-                    SetupDraft.Health.command(exec + "mongosh --quiet --eval \"db.adminCommand('ping')\"", "40s"));
+            // Images before Mongo 6 have the old "mongo" shell instead of "mongosh".
+            return Optional.of(SetupDraft.Health.command(
+                    exec + "sh -c 'mongosh --quiet --eval \"db.runCommand({ping: 1})\" || mongo --quiet --eval"
+                            + " \"db.runCommand({ping: 1})\"'",
+                    "40s"));
         }
         if (MailCatchers.isMailpitImage(image)) {
             return ports.stream()

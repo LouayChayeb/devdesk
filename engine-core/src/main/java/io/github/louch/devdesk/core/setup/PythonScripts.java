@@ -39,7 +39,7 @@ final class PythonScripts {
         for (String file :
                 files.stream().filter(f -> f.endsWith(".py")).sorted().toList()) {
             Optional<String> code = read.apply(file);
-            if (code.isEmpty() || !RUNS.matcher(code.get()).find()) {
+            if (code.isEmpty() || !RUNS.matcher(code.get()).find() || isTest(file, code.get())) {
                 continue;
             }
             String name = DatabaseTemplates.uniqueName(
@@ -84,5 +84,12 @@ final class PythonScripts {
             }
         }
         return Optional.empty();
+    }
+
+    /** A test file has a __main__ block too ("unittest.main()"), but it's not something that keeps running. */
+    private static boolean isTest(String file, String code) {
+        return file.matches("tests?\\.py|test_.*\\.py|.*_tests?\\.py|conftest\\.py")
+                || code.contains("unittest.main(")
+                || code.contains("pytest.main(");
     }
 }

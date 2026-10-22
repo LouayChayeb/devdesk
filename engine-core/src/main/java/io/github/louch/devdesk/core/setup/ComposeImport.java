@@ -43,6 +43,8 @@ public final class ComposeImport {
     private final String composeProject;
     private final Function<String, Optional<DetectedApp>> detectApp;
     private final List<String> notes = new ArrayList<>();
+    /** Top-level secrets: name → the file it comes from (compose mounts it at /run/secrets/name). */
+    private final Map<String, String> secretFiles = new LinkedHashMap<>();
     /** Services whose usual port DevDesk publishes because compose kept them on its own network. */
     private final Map<String, Integer> addedPorts = new LinkedHashMap<>();
 
@@ -76,6 +78,12 @@ public final class ComposeImport {
     }
 
     private Result services(YamlNode top) {
+        entry(top, "secrets")
+                .ifPresent(all -> mapping(all)
+                        .forEach((name, def) -> entry(def, "file")
+                                .flatMap(ComposeImport::text)
+                                .ifPresent(f ->
+                                        secretFiles.put(name, f.startsWith("/") || f.startsWith(".") ? f : "./" + f))));
         Map<String, YamlNode.Mapping> raw = new LinkedHashMap<>();
         entry(top, "services")
                 .ifPresent(s -> mapping(s).forEach((name, node) -> {
@@ -136,7 +144,8 @@ public final class ComposeImport {
             Optional<DetectedApp> app = detectApp.apply(dir);
             Optional<String> composeCommand = entry(s, "command").map(ComposeImport::commandLine);
             if (composeCommand.isPresent()
-                    && app.map(a -> a.origin().endsWith("Dockerfile CMD")).orElse(true)) {
+                    && app.map(a -> a.origin().matches(".*Dockerfile (CMD|ENTRYPOINT)"))
+                            .orElse(true)) {
                 // Compose's command overrides the Dockerfile's CMD, so it's the more faithful of the two.
                 app = Optional.of(new DetectedApp(
                         composeCommand.get(),
@@ -162,6 +171,11 @@ public final class ComposeImport {
                     .orElse("docker-compose.yml builds it from a Dockerfile in ./" + dir
                             + ", and DevDesk can't build images. Type the command that starts it on your machine."));
             app.ifPresent(a -> cardNotes.addAll(a.notes()));
+            for (String secret : secrets(s)) {
+                cardNotes.add("Compose gives it the secret \"" + secret + "\" at /run/secrets/" + secret + "; on your"
+                        + " machine it's the file " + secretFiles.getOrDefault(secret, "(not a file)")
+                        + ": point the setting that reads it there.");
+            }
             Map<String, String> pointed = pointAtHost(name, env, published, cardNotes);
             SetupDraft.Health health = app.flatMap(DetectedApp::healthUrl)
                     .map(SetupDraft.Health::http)
@@ -206,7 +220,7 @@ public final class ComposeImport {
                 "",
                 image.orElse(""),
                 ports,
-                volumes(s),
+                withSecrets(volumes(s), s, cardNotes),
                 env,
                 dependsOn,
                 health(s, image.orElse(""), container, ports),
@@ -303,6 +317,36 @@ public final class ComposeImport {
             }
         });
         return deps;
+    }
+
+    /**
+     * Compose mounts each secret a service lists at /run/secrets/<name>, read-only: DevDesk does the same with a bind
+     * mount of its file. A secret that isn't a file (environment:, external:) is named in a note instead.
+     */
+    private List<String> withSecrets(List<String> volumes, YamlNode.Mapping s, List<String> cardNotes) {
+        List<String> out = new ArrayList<>(volumes);
+        for (String secret : secrets(s)) {
+            String file = secretFiles.get(secret);
+            if (file == null) {
+                cardNotes.add("Its secret \"" + secret + "\" isn't a file in docker-compose.yml (environment or"
+                        + " external secrets aren't imported): mount it at /run/secrets/" + secret + " yourself.");
+            } else {
+                out.add(file + ":/run/secrets/" + secret + ":ro");
+            }
+        }
+        return out;
+    }
+
+    /** The secrets a service lists: "- db-password" or "- source: db-password". */
+    private static List<String> secrets(YamlNode.Mapping s) {
+        List<String> out = new ArrayList<>();
+        entry(s, "secrets")
+                .ifPresent(list -> list(list)
+                        .forEach(item -> (item instanceof YamlNode.Mapping m
+                                        ? entry(m, "source").flatMap(ComposeImport::text)
+                                        : text(item))
+                                .ifPresent(out::add)));
+        return out;
     }
 
     /**

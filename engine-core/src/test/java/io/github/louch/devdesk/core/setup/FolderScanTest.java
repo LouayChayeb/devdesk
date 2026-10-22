@@ -152,7 +152,8 @@ class FolderScanTest {
                         "vote/requirements.txt", "Flask\nRedis\n",
                         "result/package.json", "{\"main\": \"server.js\", \"dependencies\": {\"express\": \"4\"}}",
                         "result/server.js", "server.listen(4000)\n",
-                        "worker/Dockerfile", "FROM mcr.microsoft.com/dotnet/sdk\nCMD [\"dotnet\", \"Worker.dll\"]\n"));
+                        "worker/Dockerfile",
+                                "FROM mcr.microsoft.com/dotnet/sdk\nENTRYPOINT [\"dotnet\", \"Worker.dll\"]\n"));
 
         var services =
                 FolderScan.scan(folder, "/home/me/voting", List.of()).draft().services();
@@ -163,5 +164,45 @@ class FolderScanTest {
                 .containsEntry("vote", "flask --app app run --port 5000")
                 .containsEntry("result", "node server.js")
                 .containsEntry("worker", "dotnet Worker.dll");
+    }
+
+    @Test
+    void aTestFileIsNotAServiceAndFlaskenvNamesTheApp() {
+        // Like miguelgrinberg/microblog: an app factory named in .flaskenv, and a tests.py with a __main__ block.
+        var folder = new FakeFolder(
+                "microblog",
+                Map.of(
+                        ".flaskenv", "FLASK_APP=microblog.py\nFLASK_DEBUG=1\n",
+                        "requirements.txt", "flask==3.0\n",
+                        "microblog.py", "from app import create_app\napp = create_app()\n",
+                        "tests.py", "import unittest\nif __name__ == '__main__':\n    unittest.main()\n"));
+
+        var services =
+                FolderScan.scan(folder, "/home/me/microblog", List.of()).draft().services();
+
+        assertThat(services)
+                .extracting(SetupDraft.Service::command)
+                .containsExactly("flask --app microblog run --port 5000");
+    }
+
+    @Test
+    void aGoModuleRunsWithGoRun() {
+        // Like gothinkster/golang-gin-realworld-example-app: package main lives in hello.go.
+        var folder = new FakeFolder(
+                "realworld",
+                Map.of(
+                        "go.mod", "module example.com/realworld\n",
+                        "doc.go", "package main\n",
+                        "hello.go",
+                                "package main\nfunc main() { port := os.Getenv(\"PORT\"); if port == \"\" { port = \"8080\" } }\n"));
+
+        var services =
+                FolderScan.scan(folder, "/home/me/realworld", List.of()).draft().services();
+
+        assertThat(services).singleElement().satisfies(s -> {
+            assertThat(s.command()).isEqualTo("go run .");
+            assertThat(s.ports()).containsExactly("8080");
+            assertThat(s.notes()).anyMatch(n -> n.contains("reads PORT"));
+        });
     }
 }

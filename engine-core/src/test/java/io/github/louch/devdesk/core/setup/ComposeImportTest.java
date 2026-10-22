@@ -238,4 +238,28 @@ class ComposeImportTest {
         assertThat(worker.command()).isEqualTo("celery -A shop worker -l info");
         assertThat(web.command()).isEqualTo("node server.js");
     }
+
+    @Test
+    void secretsAreMountedWhereComposePutsThem() {
+        // Like docker/awesome-compose react-express-mysql: MariaDB reads its root password from a secret file.
+        var r = ComposeImport.read("""
+                services:
+                  db:
+                    image: mariadb:10.6
+                    environment:
+                      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/db-password
+                    secrets:
+                      - db-password
+                      - source: api-key
+                secrets:
+                  db-password:
+                    file: db/password.txt
+                  api-key:
+                    environment: API_KEY
+                """, "shop", "shop", dir -> Optional.empty());
+        var db = r.services().getFirst();
+
+        assertThat(db.volumes()).contains("./db/password.txt:/run/secrets/db-password:ro");
+        assertThat(db.notes()).anyMatch(n -> n.contains("\"api-key\" isn't a file"));
+    }
 }

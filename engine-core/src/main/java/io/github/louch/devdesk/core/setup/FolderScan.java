@@ -110,30 +110,34 @@ public final class FolderScan {
             if (covered.contains(dir)) {
                 continue;
             }
-            AppDetector.detect(folder::read, dir).ifPresent(app -> {
-                String name = DatabaseTemplates.uniqueName(
-                        ComposeImport.serviceName(dir.isEmpty() ? project : dir),
-                        new LinkedHashSet<>(
-                                services.stream().map(SetupDraft.Service::name).toList()));
-                List<String> cardNotes = new ArrayList<>(app.notes());
-                services.add(new SetupDraft.Service(
-                        name,
-                        "command",
-                        app.command(),
-                        dir,
-                        "",
-                        app.port().map(p -> List.of(String.valueOf(p))).orElse(List.of()),
-                        List.of(),
-                        Map.of(),
-                        Map.of(),
-                        app.healthUrl()
-                                .map(SetupDraft.Health::http)
-                                .orElse(app.port().map(SetupDraft.Health::tcp).orElse(SetupDraft.Health.PROCESS)),
-                        "on-failure",
-                        app.origin(),
-                        cardNotes));
-                found.add(app.origin() + ": " + app.command());
-            });
+            AppDetector.detect(folder::read, dir, dir.isEmpty() ? folder.files() : List.of())
+                    .ifPresent(app -> {
+                        String name = DatabaseTemplates.uniqueName(
+                                ComposeImport.serviceName(dir.isEmpty() ? project : dir),
+                                new LinkedHashSet<>(services.stream()
+                                        .map(SetupDraft.Service::name)
+                                        .toList()));
+                        List<String> cardNotes = new ArrayList<>(app.notes());
+                        services.add(new SetupDraft.Service(
+                                name,
+                                "command",
+                                app.command(),
+                                dir,
+                                "",
+                                app.port().map(p -> List.of(String.valueOf(p))).orElse(List.of()),
+                                List.of(),
+                                Map.of(),
+                                Map.of(),
+                                app.healthUrl()
+                                        .map(SetupDraft.Health::http)
+                                        .orElse(app.port()
+                                                .map(SetupDraft.Health::tcp)
+                                                .orElse(SetupDraft.Health.PROCESS)),
+                                "on-failure",
+                                app.origin(),
+                                cardNotes));
+                        found.add(app.origin() + ": " + app.command());
+                    });
         }
         // Plain scripts only when nothing else starts from the top folder (a Node app's helper .py isn't a service).
         if (services.stream().noneMatch(s -> !s.isContainer() && s.directory().isEmpty())) {

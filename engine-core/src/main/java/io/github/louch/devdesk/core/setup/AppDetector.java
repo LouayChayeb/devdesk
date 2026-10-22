@@ -32,11 +32,45 @@ final class AppDetector {
      * @param dir the folder to look at, relative to the project ("" = the project folder itself)
      */
     static Optional<ComposeImport.DetectedApp> detect(Function<String, Optional<String>> read, String dir) {
+        return detect(read, dir, List.of());
+    }
+
+    /** @param files the folder's file names when known (the project folder): Go's entry file may have any name */
+    static Optional<ComposeImport.DetectedApp> detect(
+            Function<String, Optional<String>> read, String dir, List<String> files) {
         Function<String, Optional<String>> here = file -> read.apply(dir.isEmpty() ? file : dir + "/" + file);
         return node(here, dir)
                 .or(() -> java(here, dir))
                 .or(() -> django(here, dir))
-                .or(() -> python(here, dir));
+                .or(() -> python(here, dir))
+                .or(() -> go(here, dir, files));
+    }
+
+    private static final Pattern GO_PORT = Pattern.compile("\"(?::)?(\\d{4,5})\"");
+
+    /** A Go module whose folder holds func main (package main): "go run ." builds and starts it. */
+    private static Optional<ComposeImport.DetectedApp> go(
+            Function<String, Optional<String>> read, String dir, List<String> files) {
+        if (read.apply("go.mod").isEmpty()) {
+            return Optional.empty();
+        }
+        List<String> candidates = new java.util.ArrayList<>(List.of("main.go"));
+        files.stream().filter(f -> f.endsWith(".go") && !f.endsWith("_test.go")).forEach(candidates::add);
+        for (String file : candidates) {
+            Optional<String> code =
+                    read.apply(file).filter(c -> c.contains("package main") && c.contains("func main("));
+            if (code.isPresent()) {
+                return Optional.of(new ComposeImport.DetectedApp(
+                        "go run .",
+                        first(GO_PORT, code.get()),
+                        Optional.empty(),
+                        where(dir, "go.mod") + " (" + file + ")",
+                        code.get().contains("Getenv(\"PORT\")")
+                                ? List.of("It reads PORT: set it under environment: if the default doesn't suit.")
+                                : List.of()));
+            }
+        }
+        return Optional.empty();
     }
 
     /**
@@ -132,6 +166,7 @@ final class AppDetector {
     }
 
     private static final Pattern FASTAPI = Pattern.compile("(?m)^(\\w+)\\s*=\\s*FastAPI\\(");
+    private static final Pattern FLASK_APP = Pattern.compile("(?m)^\\s*FLASK_APP\\s*=\\s*[\"']?([\\w./:-]+)");
     private static final Pattern FLASK = Pattern.compile("(?m)^(\\w+)\\s*=\\s*Flask\\(");
 
     /** A FastAPI or Flask app in main.py or app.py, whose packages requirements.txt or pyproject.toml list. */
@@ -140,6 +175,22 @@ final class AppDetector {
                 + read.apply("pyproject.toml").orElse("");
         String install =
                 read.apply("requirements.txt").isPresent() ? "pip install -r requirements.txt" : "pip install -e .";
+        // FLASK_APP in .flaskenv (or .env) names the app, also one made by a factory (app = create_app()).
+        Optional<String> flaskApp = read.apply(".flaskenv")
+                .or(() -> read.apply(".env"))
+                .flatMap(env -> {
+                    Matcher m = FLASK_APP.matcher(env);
+                    return m.find() ? Optional.of(m.group(1).replaceFirst("\\.py$", "")) : Optional.empty();
+                });
+        if (flaskApp.isPresent() && deps.toLowerCase().contains("flask")) {
+            return Optional.of(new ComposeImport.DetectedApp(
+                    "flask --app " + flaskApp.get() + " run --port 5000",
+                    Optional.of(5000),
+                    Optional.empty(),
+                    where(dir, ".flaskenv") + " FLASK_APP",
+                    List.of("It needs its packages: run \"" + install + "\" in ./" + dir
+                            + " once (in a virtualenv).")));
+        }
         for (String file : List.of("main.py", "app.py")) {
             Optional<String> code = read.apply(file);
             if (code.isEmpty()) {
@@ -171,38 +222,59 @@ final class AppDetector {
     }
 
     private static final Pattern CMD = Pattern.compile("(?im)^\\s*CMD\\s+(.+)$");
+    private static final Pattern ENTRYPOINT = Pattern.compile("(?im)^\\s*ENTRYPOINT\\s+(.+)$");
     private static final Pattern EXPOSE = Pattern.compile("(?im)^\\s*EXPOSE\\s+(\\d{2,5})");
 
-    /** The Dockerfile's last CMD, exec form ["node", "server.js"] or shell form, and its first EXPOSE as the port. */
+    /**
+     * What the Dockerfile runs: its last ENTRYPOINT followed by its last CMD (as Docker does), each in exec form
+     * ["node", "server.js"] or shell form, and its first EXPOSE as the port.
+     */
     private static Optional<ComposeImport.DetectedApp> dockerfile(Function<String, Optional<String>> read, String dir) {
         Optional<String> file = read.apply("Dockerfile");
         if (file.isEmpty()) {
             return Optional.empty();
         }
-        Matcher m = CMD.matcher(file.get());
-        String cmd = null;
-        while (m.find()) {
-            cmd = m.group(1).strip(); // the last CMD wins, as in Docker
-        }
-        if (cmd == null) {
+        Optional<String> entrypoint = last(ENTRYPOINT, file.get()).flatMap(AppDetector::words);
+        Optional<String> cmd = last(CMD, file.get()).flatMap(AppDetector::words);
+        if (entrypoint.isEmpty() && cmd.isEmpty()) {
             return Optional.empty();
         }
-        if (cmd.startsWith("[")) {
-            Optional<JsonNode> words = json(cmd);
-            if (words.isEmpty() || !words.get().isArray()) {
-                return Optional.empty();
-            }
-            List<String> parts = new java.util.ArrayList<>();
-            words.get().forEach(w -> parts.add(quoteIfNeeded(w.asString(""))));
-            cmd = String.join(" ", parts);
-        }
+        String line = String.join(
+                " ",
+                java.util.stream.Stream.of(entrypoint, cmd)
+                        .flatMap(Optional::stream)
+                        .toList());
         return Optional.of(new ComposeImport.DetectedApp(
-                cmd,
+                line,
                 first(EXPOSE, file.get()),
                 Optional.empty(),
-                where(dir, "Dockerfile") + " CMD",
+                where(dir, "Dockerfile") + (entrypoint.isPresent() ? " ENTRYPOINT" : " CMD"),
                 List.of("Taken from the Dockerfile's CMD: it assumes what the image installs (packages, tools) is"
                         + " installed here too. Check it before starting.")));
+    }
+
+    /** The last match: a later instruction replaces an earlier one, as in Docker. */
+    private static Optional<String> last(Pattern p, String text) {
+        Matcher m = p.matcher(text);
+        String found = null;
+        while (m.find()) {
+            found = m.group(1).strip();
+        }
+        return Optional.ofNullable(found);
+    }
+
+    /** Exec form ["dotnet", "Worker.dll"] as a shell line; shell form as it is. */
+    private static Optional<String> words(String instruction) {
+        if (!instruction.startsWith("[")) {
+            return Optional.of(instruction);
+        }
+        Optional<JsonNode> words = json(instruction);
+        if (words.isEmpty() || !words.get().isArray()) {
+            return Optional.empty();
+        }
+        List<String> parts = new java.util.ArrayList<>();
+        words.get().forEach(w -> parts.add(quoteIfNeeded(w.asString(""))));
+        return Optional.of(String.join(" ", parts));
     }
 
     private static String quoteIfNeeded(String word) {
