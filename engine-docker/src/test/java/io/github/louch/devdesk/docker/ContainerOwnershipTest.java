@@ -46,6 +46,18 @@ class ContainerOwnershipTest {
         assumeTrue(result instanceof DockerConnection.Result.Connected, "Docker not available: " + result);
         runtime = ((DockerConnection.Result.Connected) result).runtime();
         docker = runtime.client();
+        // A fresh machine (CI) may not have it yet: these tests create containers from it directly.
+        try {
+            docker.inspectImageCmd("alpine:3").exec();
+        } catch (com.github.dockerjava.api.exception.NotFoundException e) {
+            try {
+                docker.pullImageCmd("alpine:3")
+                        .exec(new com.github.dockerjava.api.command.PullImageResultCallback())
+                        .awaitCompletion();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @AfterEach
