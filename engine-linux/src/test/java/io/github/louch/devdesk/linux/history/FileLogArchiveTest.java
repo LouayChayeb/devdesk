@@ -20,7 +20,7 @@ class FileLogArchiveTest {
     private static final Instant T = Instant.parse("2026-10-12T23:59:58Z");
 
     private FileLogArchive archive() {
-        var a = new FileLogArchive(dir);
+        var a = new FileLogArchive(dir, java.time.Clock.fixed(T, java.time.ZoneOffset.UTC));
         a.append(new LogLine(T, "api", "stdout", "api: listening on 18080"));
         a.append(new LogLine(T.plusSeconds(1), "api", "stderr", "Traceback (most recent call last):"));
         a.append(new LogLine(T.plusSeconds(1), "web", "stdout", "web: GET /orders 200"));

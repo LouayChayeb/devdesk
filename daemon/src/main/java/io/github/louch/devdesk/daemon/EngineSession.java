@@ -427,7 +427,7 @@ final class EngineSession implements AutoCloseable {
                                 "message", i.message()));
             case ProjectLoader.Result.Loaded raw -> {
                 ProjectLoader.Result.Loaded l = withProfile(raw);
-                archive = Optional.of(FileLogArchive.forProject(engine.environment(), l.project()));
+                archive = Optional.of(FileLogArchive.forProject(engine.environment(), l.project(), engine.clock()));
                 supervisor.ifPresent(ProjectSupervisor::close);
                 supervisor = Optional.empty();
                 project = Optional.of(l);

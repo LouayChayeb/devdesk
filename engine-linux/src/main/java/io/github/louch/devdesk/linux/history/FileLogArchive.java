@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -33,21 +34,24 @@ public final class FileLogArchive implements LogArchive {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final Path dir;
+    /** For "which days are older than a week": injected, so tests don't depend on today's date. */
+    private final Clock clock;
     // ---- guarded by "this" ----
     private LocalDate openDay;
     private BufferedWriter writer;
     private long written;
     private boolean full;
 
-    public FileLogArchive(Path dir) {
+    public FileLogArchive(Path dir, Clock clock) {
         this.dir = dir;
+        this.clock = clock;
         deleteOldDays();
     }
 
-    public static FileLogArchive forProject(Map<String, String> env, ProjectSpec project) {
+    public static FileLogArchive forProject(Map<String, String> env, ProjectSpec project, Clock clock) {
         String state = env.getOrDefault("XDG_STATE_HOME", "");
         Path base = state.isBlank() ? Path.of(env.getOrDefault("HOME", "/tmp"), ".local", "state") : Path.of(state);
-        return new FileLogArchive(base.resolve("devdesk").resolve("logs").resolve(project.key()));
+        return new FileLogArchive(base.resolve("devdesk").resolve("logs").resolve(project.key()), clock);
     }
 
     @Override
@@ -156,7 +160,7 @@ public final class FileLogArchive implements LogArchive {
     }
 
     private void deleteOldDays() {
-        LocalDate oldest = LocalDate.now(ZoneOffset.UTC).minusDays(KEEP_DAYS);
+        LocalDate oldest = LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC).minusDays(KEEP_DAYS);
         for (Path file : days()) {
             if (dayOf(file).map(d -> d.isBefore(oldest)).orElse(false)) {
                 try {
