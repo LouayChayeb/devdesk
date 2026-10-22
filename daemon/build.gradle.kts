@@ -10,6 +10,7 @@ dependencies {
     implementation(project(":engine-core"))
     implementation(project(":engine-linux"))
     implementation(project(":engine-docker"))
+    implementation(project(":engine-data"))
     implementation(libs.javalin) // small HTTP + WebSocket server
     implementation(libs.jackson.databind) // JSON for the API
     runtimeOnly(libs.slf4j2.nop) // Javalin, Jetty and docker-java log through SLF4J; DevDesk prints its own messages

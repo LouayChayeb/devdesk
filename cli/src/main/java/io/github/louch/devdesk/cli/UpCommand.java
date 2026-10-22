@@ -26,6 +26,7 @@ import io.github.louch.devdesk.linux.trust.TrustStore;
 import java.io.PrintStream;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -81,6 +82,10 @@ final class UpCommand implements Callable<Integer> {
     private final Map<String, String> env;
     private final PrintStream out;
     private final PrintStream err;
+    /** Set in {@link #call()}: the queue in front of {@code out}. */
+    private TerminalWriter terminal;
+
+    private PrintStream screen;
 
     UpCommand(Engine engine, Map<String, String> env, PrintStream out, PrintStream err) {
         this.engine = engine;
@@ -119,7 +124,10 @@ final class UpCommand implements Callable<Integer> {
             }
             case ProjectLock.Result.Acquired acquired -> lock = acquired.lock();
         }
-        var printer = new ProgressPrinter(out, project.project().services().keySet());
+        // From here on everything goes through the terminal writer: the engine must never wait for the terminal.
+        terminal = new TerminalWriter(out);
+        screen = terminal.stream();
+        var printer = new ProgressPrinter(screen, project.project().services().keySet());
         // The flight recorder listens next to the printer: everything shown is also kept for `devdesk history`.
         var recorder = new Recorder(JsonlHistoryStore.forProject(env, project.project()), engine.clock());
         recorder.sessionStarted("devdesk up");
@@ -147,7 +155,7 @@ final class UpCommand implements Callable<Integer> {
         });
         Runtime.getRuntime().addShutdownHook(onCtrlC);
 
-        out.println("Starting " + project.project().name() + " ("
+        screen.println("Starting " + project.project().name() + " ("
                 + project.project().services().size()
                 + (project.project().services().size() == 1 ? " service)" : " services)"));
         Map<String, ServiceState> states = supervisor.up().join();
@@ -157,6 +165,7 @@ final class UpCommand implements Callable<Integer> {
             supervisor.close();
             recorder.sessionEnded("nothing came up");
             lock.close();
+            terminal.flush(Duration.ofSeconds(2));
             return 1;
         }
         new CountDownLatch(1).await(); // keep running until Ctrl+C
@@ -164,7 +173,7 @@ final class UpCommand implements Callable<Integer> {
     }
 
     private void stopAll(ProjectSupervisor supervisor) {
-        out.println("Stopping everything (dependents first)...");
+        screen.println("Stopping everything (dependents first)...");
         try {
             supervisor.down().get(2, TimeUnit.MINUTES);
         } catch (TimeoutException e) {
@@ -173,6 +182,7 @@ final class UpCommand implements Callable<Integer> {
             err.println("devdesk: stopping failed: " + e);
         } finally {
             supervisor.close();
+            terminal.flush(Duration.ofSeconds(2)); // show the "■ stopped" lines before the JVM exits
         }
     }
 
@@ -189,7 +199,8 @@ final class UpCommand implements Callable<Integer> {
         if (reports.isEmpty()) {
             return;
         }
-        out.println("! A previous DevDesk was killed or crashed and left " + reports.size() + " thing(s) running for "
+        screen.println("! A previous DevDesk was killed or crashed and left " + reports.size()
+                + " thing(s) running for "
                 + project.project().name() + ". They're provably DevDesk's own (systemd scope / container label "
                 + "with this project's key), so they're stopped first:");
         for (Survivors.Report r : reports) {
@@ -198,7 +209,7 @@ final class UpCommand implements Callable<Integer> {
                     + l.since()
                             .map(t -> ", running since " + SINCE.format(t)) // local time, like `devdesk history`
                             .orElse("");
-            out.println("    " + what + "  →  " + r.result());
+            screen.println("    " + what + "  →  " + r.result());
             recorder.accept(new ProjectEvent.Warning(
                     l.service(), "left behind by a DevDesk that was killed: " + what + " → " + r.result()));
         }

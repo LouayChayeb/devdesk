@@ -67,6 +67,10 @@ public final class Main {
                                 System.out,
                                 System.err))
                 .addSubcommand(
+                        "doctor",
+                        new DoctorCommand(
+                                env, system, diagnosis, () -> DockerConnection.connect(env), System.out, System.err))
+                .addSubcommand(
                         "why",
                         new WhyCommand(
                                 env, system, diagnosis, () -> DockerConnection.connect(env), System.out, System.err));
