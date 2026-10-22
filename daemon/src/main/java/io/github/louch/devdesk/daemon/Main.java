@@ -37,7 +37,9 @@ import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
 import io.github.louch.devdesk.linux.doctor.ToolVersions;
 import io.github.louch.devdesk.linux.health.LocalHealthProbe;
 import io.github.louch.devdesk.linux.network.ProcNetListeners;
+import io.github.louch.devdesk.linux.process.GroupLeftovers;
 import io.github.louch.devdesk.linux.process.LinuxProcessRuntime;
+import io.github.louch.devdesk.linux.process.ProcessLeftovers;
 import io.github.louch.devdesk.linux.process.ScopeLeftovers;
 import io.github.louch.devdesk.linux.resources.ProcResources;
 import io.github.louch.devdesk.linux.sleep.SocketWake;
@@ -70,12 +72,12 @@ public final class Main {
         var random = new SecureRandom();
         var listeners = new ProcNetListeners();
         var engine = new EngineSession.Engine(
-                LinuxProcessRuntime.detect(clock, random),
+                LinuxProcessRuntime.detect(clock, random, new GroupLeftovers(GroupLeftovers.defaultFolder(env))),
                 () -> DockerConnection.connect(env),
                 new LocalHealthProbe(new LinuxProcessRuntime(false, clock, random)),
                 new LinuxIntrospection(listeners),
                 DiagnosisEngine.standard(),
-                new ScopeLeftovers(),
+                new ProcessLeftovers(new ScopeLeftovers(), new GroupLeftovers(GroupLeftovers.defaultFolder(env))),
                 new TrustStore(TrustStore.defaultFile(env)),
                 new ProcResources(),
                 Map.of(

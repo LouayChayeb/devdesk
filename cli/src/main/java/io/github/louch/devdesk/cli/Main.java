@@ -7,7 +7,9 @@ import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
 import io.github.louch.devdesk.linux.doctor.ToolVersions;
 import io.github.louch.devdesk.linux.health.LocalHealthProbe;
 import io.github.louch.devdesk.linux.network.ProcNetListeners;
+import io.github.louch.devdesk.linux.process.GroupLeftovers;
 import io.github.louch.devdesk.linux.process.LinuxProcessRuntime;
+import io.github.louch.devdesk.linux.process.ProcessLeftovers;
 import io.github.louch.devdesk.linux.process.ScopeLeftovers;
 import io.github.louch.devdesk.linux.resources.ProcResources;
 import io.github.louch.devdesk.linux.trust.TrustStore;
@@ -33,7 +35,7 @@ public final class Main {
         var clock = Clock.systemUTC();
         var random = new SecureRandom();
         var env = System.getenv();
-        var runtime = LinuxProcessRuntime.detect(clock, random);
+        var runtime = LinuxProcessRuntime.detect(clock, random, new GroupLeftovers(GroupLeftovers.defaultFolder(env)));
         // Health-check commands are short-lived: a plain process group is enough, and avoids a systemd unit per probe.
         var probe = new LocalHealthProbe(new LinuxProcessRuntime(false, clock, random));
         var trust = new TrustStore(TrustStore.defaultFile(env));
@@ -46,7 +48,7 @@ public final class Main {
                 probe,
                 system,
                 diagnosis,
-                new ScopeLeftovers(),
+                new ProcessLeftovers(new ScopeLeftovers(), new GroupLeftovers(GroupLeftovers.defaultFolder(env))),
                 new ProcResources(),
                 trust,
                 knownGood,
@@ -65,7 +67,8 @@ public final class Main {
                         new PsCommand(
                                 env,
                                 system,
-                                new ScopeLeftovers(),
+                                new ProcessLeftovers(
+                                        new ScopeLeftovers(), new GroupLeftovers(GroupLeftovers.defaultFolder(env))),
                                 () -> DockerConnection.connect(env),
                                 clock,
                                 System.out,

@@ -43,6 +43,9 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
     private final boolean useSystemdScope;
     private final Clock clock;
     private final RandomGenerator random;
+    /** Group mode: where each group is written down, so a hard-killed DevDesk's groups are found again. */
+    private final Optional<GroupLeftovers> records;
+
     private final Map<RunningProcess, Tracked> tracked = new ConcurrentHashMap<>();
 
     /** Where a process family lives, which decides how we find and signal its members. */
@@ -60,17 +63,29 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         record Nothing() implements Ownership {}
     }
 
-    private record Tracked(Process process, Ownership ownership, CompletableFuture<ExitStatus> exit) {}
+    private record Tracked(String owner, Process process, Ownership ownership, CompletableFuture<ExitStatus> exit) {}
 
+    /** Without records: for health-check commands and tests, whose processes are never left behind. */
     public LinuxProcessRuntime(boolean useSystemdScope, Clock clock, RandomGenerator random) {
+        this(useSystemdScope, clock, random, Optional.empty());
+    }
+
+    public LinuxProcessRuntime(
+            boolean useSystemdScope, Clock clock, RandomGenerator random, Optional<GroupLeftovers> records) {
         this.useSystemdScope = useSystemdScope;
         this.clock = clock;
         this.random = random;
+        this.records = records;
     }
 
     /** Uses a systemd scope when a systemd user session is running, otherwise plain process groups. */
     public static LinuxProcessRuntime detect(Clock clock, RandomGenerator random) {
         return new LinuxProcessRuntime(systemdUserSessionRunning(), clock, random);
+    }
+
+    /** Like {@link #detect(Clock, RandomGenerator)}, and in group mode writes each group down in {@code records}. */
+    public static LinuxProcessRuntime detect(Clock clock, RandomGenerator random, GroupLeftovers records) {
+        return new LinuxProcessRuntime(systemdUserSessionRunning(), clock, random, Optional.of(records));
     }
 
     public boolean usesSystemdScope() {
@@ -92,6 +107,12 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         Map<String, String> env = builder.environment();
         env.clear(); // the spec's environment is complete; don't leak DevDesk's own variables into services
         env.putAll(spec.environment());
+        // Group mode: a random marker every process of this family inherits. After a crash, it's what proves a
+        // process in a recorded group is really ours, even if the kernel reused the group's number meanwhile.
+        String marker = records.isPresent() && !useSystemdScope && !spec.owner().isBlank() ? newMarker() : "";
+        if (!marker.isEmpty()) {
+            env.put(GroupLeftovers.MARKER, marker);
+        }
         if (useSystemdScope) {
             // systemd-run needs these to reach the user's systemd manager over D-Bus.
             copyIfMissing(env, "XDG_RUNTIME_DIR");
@@ -115,6 +136,10 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         CompletableFuture<Void> outputDone = CompletableFuture.allOf(stdoutDone, stderrDone);
 
         Ownership ownership = awaitOwnership(spec, process, unit, notBefore);
+        if (ownership instanceof Ownership.Group g) {
+            records.ifPresent(r ->
+                    r.remember(spec.owner(), spec.name(), g.processGroup(), g.notBefore(), marker, spec.command()));
+        }
         RunningProcess running = new RunningProcess(spec.name(), process.pid(), clock.instant());
         // Report the exit only after the last output lines arrived, so "exited" never prints before them.
         // Bounded: a leftover child can hold the pipe open forever, and then we report the exit anyway.
@@ -122,7 +147,13 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
                 .thenCompose(p -> outputDone
                         .completeOnTimeout(null, OUTPUT_SETTLE_MILLIS, TimeUnit.MILLISECONDS)
                         .thenApply(ignored -> ExitStatus.of(p.exitValue())));
-        tracked.put(running, new Tracked(process, ownership, exit));
+        tracked.put(running, new Tracked(spec.owner(), process, ownership, exit));
+        // Exited with no children left: its record has nothing to find any more.
+        exit.thenRun(() -> {
+            if (ownership instanceof Ownership.Group g) {
+                forgetIfEmpty(spec.owner(), g);
+            }
+        });
         return running;
     }
 
@@ -156,9 +187,24 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
     public Set<Long> members(RunningProcess process) {
         return switch (find(process).ownership()) {
             case Ownership.Scope scope -> cgroupMembers(scope.cgroupDir());
-            case Ownership.Group group -> groupMembers(group);
+            case Ownership.Group group -> forgetIfEmpty(find(process).owner(), group);
             case Ownership.Nothing nothing -> Set.of();
         };
+    }
+
+    private String newMarker() {
+        byte[] bytes = new byte[12];
+        random.nextBytes(bytes);
+        return java.util.HexFormat.of().formatHex(bytes);
+    }
+
+    /** The group's members; once there are none, its record is deleted (nothing left to find after a crash). */
+    private Set<Long> forgetIfEmpty(String owner, Ownership.Group group) {
+        Set<Long> members = groupMembers(group);
+        if (members.isEmpty()) {
+            records.ifPresent(r -> r.forget(owner, group.processGroup()));
+        }
+        return members;
     }
 
     private Tracked find(RunningProcess process) {
