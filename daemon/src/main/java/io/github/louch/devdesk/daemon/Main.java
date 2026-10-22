@@ -96,8 +96,10 @@ public final class Main {
                 clock,
                 random);
         var recentRequests = new RecentRequests();
+        // Read once: extras' routes are registered at start, so a change of the switch applies after a restart.
+        boolean extras = Extras.enabled(env);
         var session = new EngineSession(
-                engine, recentRequests, new ActiveProfiles(StateFolder.of(env).resolve("profiles.properties")));
+                engine, recentRequests, new ActiveProfiles(StateFolder.of(env).resolve("profiles.properties")), extras);
 
         byte[] secret = new byte[32];
         random.nextBytes(secret);
@@ -115,7 +117,9 @@ public final class Main {
         var mocks = new MockWorkbench(session, new JdkMockServer(clock), p -> JsonMockBook.forProject(env, p), random);
         var watch = new FileWatchLoop(session, new PollingFileTree(), clock);
         watch.start();
-        new AutoSleep(session, new SocketWake(), clock).start();
+        if (extras) {
+            new AutoSleep(session, new SocketWake(), clock).start(); // an extra: off unless turned on
+        }
         var changes = new ChangeTracker(
                 session,
                 session::docker,
@@ -166,6 +170,8 @@ public final class Main {
                 new RemoteWorkbench(session, StateFolder.of(env).resolve("remotes")),
                 watch,
                 new TerminalSockets(new ServiceShells(session, new PtyTerminals(), env)),
+                extras,
+                env,
                 token);
         int port = server.start();
 

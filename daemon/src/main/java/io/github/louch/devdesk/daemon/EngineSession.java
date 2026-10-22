@@ -146,8 +146,12 @@ final class EngineSession implements AutoCloseable {
     /** The profile each project runs with on this machine. */
     private final ActiveProfiles profiles;
 
-    EngineSession(Engine engine, RecentRequests recentRequests, ActiveProfiles profiles) {
+    /** S3 and Elasticsearch are extras (see {@link Extras}): without them, they aren't listed as databases. */
+    private final boolean extras;
+
+    EngineSession(Engine engine, RecentRequests recentRequests, ActiveProfiles profiles, boolean extras) {
         this.engine = engine;
+        this.extras = extras;
         this.recentRequests = recentRequests;
         this.profiles = profiles;
     }
@@ -556,6 +560,9 @@ final class EngineSession implements AutoCloseable {
     private List<DatabaseTarget> targets(ProjectSpec p) {
         List<DatabaseTarget> all = new ArrayList<>(DatabaseTargets.find(p));
         all.addAll(engine.sqliteFiles().apply(p.root()));
+        if (!extras) {
+            all.removeIf(t -> t.kind() == DatabaseTarget.Kind.OBJECTS || t.kind() == DatabaseTarget.Kind.SEARCH);
+        }
         return all;
     }
 

@@ -71,6 +71,10 @@ final class ApiServer {
     private final RemoteWorkbench remote;
     private final FileWatchLoop watch;
     private final TerminalSockets terminals;
+    /** The extras' routes are registered only when on (see {@link Extras}). */
+    private final boolean extras;
+
+    private final Map<String, String> environment;
     private final byte[] token;
     private final Map<String, EventClient> clients = new ConcurrentHashMap<>();
     private Javalin app;
@@ -97,6 +101,8 @@ final class ApiServer {
             RemoteWorkbench remote,
             FileWatchLoop watch,
             TerminalSockets terminals,
+            boolean extras,
+            Map<String, String> environment,
             String token) {
         this.session = session;
         this.requests = requests;
@@ -119,7 +125,20 @@ final class ApiServer {
         this.remote = remote;
         this.watch = watch;
         this.terminals = terminals;
+        this.extras = extras;
+        this.environment = environment;
         this.token = token.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The extras switch as the app shows it: what runs now, what the settings file says (the next start), and
+     * whether DEVDESK_EXTRAS overrides the file.
+     */
+    private Map<String, Object> settings() {
+        return Map.of(
+                "extras", extras,
+                "extrasSaved", Extras.saved(environment).orElse(false),
+                "extrasFromEnvironment", Extras.forcedByEnvironment(environment));
     }
 
     /** Starts on 127.0.0.1 and a free port chosen by the kernel (port 0). Returns that port. */
@@ -130,6 +149,16 @@ final class ApiServer {
             config.routes.before(this::guard);
             config.routes.options("/*", ctx -> ctx.status(HttpStatus.NO_CONTENT));
             config.routes.get("/api/v1/project", ctx -> answer(ctx, session.project()));
+            // App settings: the extras switch (applies after a restart, since routes are registered once).
+            config.routes.get("/api/v1/settings", ctx -> ctx.json(settings()));
+            config.routes.post("/api/v1/settings/extras", ctx -> {
+                if (!(ctx.bodyAsClass(Map.class).get("on") instanceof Boolean on)) {
+                    ctx.status(400).json(ApiJson.error("send {\"on\": true} or {\"on\": false}"));
+                    return;
+                }
+                Extras.save(environment, on);
+                ctx.json(settings());
+            });
             config.routes.post("/api/v1/project/open", ctx -> {
                 Map<?, ?> body = ctx.bodyAsClass(Map.class);
                 Object path = body.get("path");
@@ -254,35 +283,40 @@ final class ApiServer {
             });
             // One zip with states, findings, logs, timeline and settings, secrets taken out.
             config.routes.post("/api/v1/project/bundle", ctx -> answer(ctx, bundle.write(ctx.bodyAsClass(Map.class))));
-            // The traffic recorder: record the calls to a service through a stand-in port, then replay them.
-            // The stress lab: climbing load on one URL of this machine, and which service gives up first.
-            // Another machine over SSH: deploy the project there, or use it as a remote dev box.
-            config.routes.get("/api/v1/remote", ctx -> answer(ctx, remote.status()));
-            config.routes.post(
-                    "/api/v1/remote/target", ctx -> answer(ctx, remote.setTarget(ctx.bodyAsClass(Map.class))));
-            config.routes.post(
-                    "/api/v1/remote/run",
-                    ctx -> answer(
-                            ctx,
-                            remote.run(String.valueOf(ctx.bodyAsClass(Map.class).get("mode")))));
-            config.routes.post(
-                    "/api/v1/remote/stop",
-                    ctx -> answer(
-                            ctx,
-                            remote.stop(Boolean.TRUE.equals(
-                                    ctx.bodyAsClass(Map.class).get("stopRemote")))));
-            config.routes.get("/api/v1/stress", ctx -> answer(ctx, stress.current()));
-            config.routes.post("/api/v1/stress/start", ctx -> answer(ctx, stress.start(ctx.bodyAsClass(Map.class))));
-            config.routes.post("/api/v1/stress/cancel", ctx -> answer(ctx, stress.cancel()));
-            config.routes.get("/api/v1/recorder", ctx -> answer(ctx, recorder.overview()));
-            config.routes.post(
-                    "/api/v1/recorder/start", ctx -> answer(ctx, recorder.start(ctx.bodyAsClass(Map.class))));
-            config.routes.get("/api/v1/recorder/{id}", ctx -> answer(ctx, recorder.calls(ctx.pathParam("id"))));
-            config.routes.post("/api/v1/recorder/{id}/stop", ctx -> answer(ctx, recorder.stop(ctx.pathParam("id"))));
-            config.routes.post(
-                    "/api/v1/recorder/{id}/replay", ctx -> answer(ctx, recorder.replay(ctx.pathParam("id"))));
-            config.routes.post(
-                    "/api/v1/recorder/{id}/delete", ctx -> answer(ctx, recorder.delete(ctx.pathParam("id"))));
+            if (extras) { // extras: recorder, stress lab, remote machine (see Extras)
+                // The traffic recorder: record the calls to a service through a stand-in port, then replay them.
+                // The stress lab: climbing load on one URL of this machine, and which service gives up first.
+                // Another machine over SSH: deploy the project there, or use it as a remote dev box.
+                config.routes.get("/api/v1/remote", ctx -> answer(ctx, remote.status()));
+                config.routes.post(
+                        "/api/v1/remote/target", ctx -> answer(ctx, remote.setTarget(ctx.bodyAsClass(Map.class))));
+                config.routes.post(
+                        "/api/v1/remote/run",
+                        ctx -> answer(
+                                ctx,
+                                remote.run(String.valueOf(
+                                        ctx.bodyAsClass(Map.class).get("mode")))));
+                config.routes.post(
+                        "/api/v1/remote/stop",
+                        ctx -> answer(
+                                ctx,
+                                remote.stop(Boolean.TRUE.equals(
+                                        ctx.bodyAsClass(Map.class).get("stopRemote")))));
+                config.routes.get("/api/v1/stress", ctx -> answer(ctx, stress.current()));
+                config.routes.post(
+                        "/api/v1/stress/start", ctx -> answer(ctx, stress.start(ctx.bodyAsClass(Map.class))));
+                config.routes.post("/api/v1/stress/cancel", ctx -> answer(ctx, stress.cancel()));
+                config.routes.get("/api/v1/recorder", ctx -> answer(ctx, recorder.overview()));
+                config.routes.post(
+                        "/api/v1/recorder/start", ctx -> answer(ctx, recorder.start(ctx.bodyAsClass(Map.class))));
+                config.routes.get("/api/v1/recorder/{id}", ctx -> answer(ctx, recorder.calls(ctx.pathParam("id"))));
+                config.routes.post(
+                        "/api/v1/recorder/{id}/stop", ctx -> answer(ctx, recorder.stop(ctx.pathParam("id"))));
+                config.routes.post(
+                        "/api/v1/recorder/{id}/replay", ctx -> answer(ctx, recorder.replay(ctx.pathParam("id"))));
+                config.routes.post(
+                        "/api/v1/recorder/{id}/delete", ctx -> answer(ctx, recorder.delete(ctx.pathParam("id"))));
+            }
             config.routes.get("/api/v1/project/history", ctx -> {
                 // ?hours=24 by default; at most the 14 days the recorder keeps.
                 String hours = ctx.queryParam("hours");
@@ -411,53 +445,56 @@ final class ApiServer {
             config.routes.post(
                     "/api/v1/data/{service}/backups/{name}/delete",
                     ctx -> answer(ctx, data.deleteBackup(ctx.pathParam("service"), ctx.pathParam("name"))));
-            // S3-style file storage: buckets, one folder level at a time, previews, and explicit changes.
-            config.routes.get(
-                    "/api/v1/data/{service}/objects/buckets",
-                    ctx -> answer(ctx, data.buckets(ctx.pathParam("service"))));
-            config.routes.post(
-                    "/api/v1/data/{service}/objects/buckets",
-                    ctx -> answer(ctx, data.createBucket(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
-            config.routes.get(
-                    "/api/v1/data/{service}/objects",
-                    ctx -> answer(
-                            ctx,
-                            data.files(
-                                    ctx.pathParam("service"),
-                                    Objects.requireNonNullElse(ctx.queryParam("bucket"), ""),
-                                    Objects.requireNonNullElse(ctx.queryParam("prefix"), ""),
-                                    Optional.ofNullable(ctx.queryParam("after")).filter(a -> !a.isEmpty()))));
-            config.routes.get(
-                    "/api/v1/data/{service}/objects/preview",
-                    ctx -> answer(
-                            ctx,
-                            data.preview(
-                                    ctx.pathParam("service"),
-                                    Objects.requireNonNullElse(ctx.queryParam("bucket"), ""),
-                                    Objects.requireNonNullElse(ctx.queryParam("key"), ""))));
-            config.routes.post(
-                    "/api/v1/data/{service}/objects/download",
-                    ctx -> answer(ctx, data.download(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
-            config.routes.post(
-                    "/api/v1/data/{service}/objects/upload",
-                    ctx -> answer(ctx, data.upload(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
-            config.routes.post(
-                    "/api/v1/data/{service}/objects/delete",
-                    ctx -> answer(ctx, data.deleteFile(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
-            // Elasticsearch / OpenSearch: indices, their fields, and searches (read-only).
-            config.routes.get(
-                    "/api/v1/data/{service}/search/indices",
-                    ctx -> answer(ctx, data.indices(ctx.pathParam("service"))));
-            config.routes.get(
-                    "/api/v1/data/{service}/search/mapping",
-                    ctx -> answer(
-                            ctx,
-                            data.mapping(
-                                    ctx.pathParam("service"),
-                                    Objects.requireNonNullElse(ctx.queryParam("index"), ""))));
-            config.routes.post(
-                    "/api/v1/data/{service}/search",
-                    ctx -> answer(ctx, data.search(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+            if (extras) { // extras: S3 and Elasticsearch pages
+                // S3-style file storage: buckets, one folder level at a time, previews, and explicit changes.
+                config.routes.get(
+                        "/api/v1/data/{service}/objects/buckets",
+                        ctx -> answer(ctx, data.buckets(ctx.pathParam("service"))));
+                config.routes.post(
+                        "/api/v1/data/{service}/objects/buckets",
+                        ctx -> answer(ctx, data.createBucket(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+                config.routes.get(
+                        "/api/v1/data/{service}/objects",
+                        ctx -> answer(
+                                ctx,
+                                data.files(
+                                        ctx.pathParam("service"),
+                                        Objects.requireNonNullElse(ctx.queryParam("bucket"), ""),
+                                        Objects.requireNonNullElse(ctx.queryParam("prefix"), ""),
+                                        Optional.ofNullable(ctx.queryParam("after"))
+                                                .filter(a -> !a.isEmpty()))));
+                config.routes.get(
+                        "/api/v1/data/{service}/objects/preview",
+                        ctx -> answer(
+                                ctx,
+                                data.preview(
+                                        ctx.pathParam("service"),
+                                        Objects.requireNonNullElse(ctx.queryParam("bucket"), ""),
+                                        Objects.requireNonNullElse(ctx.queryParam("key"), ""))));
+                config.routes.post(
+                        "/api/v1/data/{service}/objects/download",
+                        ctx -> answer(ctx, data.download(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+                config.routes.post(
+                        "/api/v1/data/{service}/objects/upload",
+                        ctx -> answer(ctx, data.upload(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+                config.routes.post(
+                        "/api/v1/data/{service}/objects/delete",
+                        ctx -> answer(ctx, data.deleteFile(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+                // Elasticsearch / OpenSearch: indices, their fields, and searches (read-only).
+                config.routes.get(
+                        "/api/v1/data/{service}/search/indices",
+                        ctx -> answer(ctx, data.indices(ctx.pathParam("service"))));
+                config.routes.get(
+                        "/api/v1/data/{service}/search/mapping",
+                        ctx -> answer(
+                                ctx,
+                                data.mapping(
+                                        ctx.pathParam("service"),
+                                        Objects.requireNonNullElse(ctx.queryParam("index"), ""))));
+                config.routes.post(
+                        "/api/v1/data/{service}/search",
+                        ctx -> answer(ctx, data.search(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+            }
             // Postgres's own slowest-queries list, and the explicit steps to switch it on or start over.
             config.routes.get(
                     "/api/v1/data/{service}/slow-queries",
@@ -718,25 +755,28 @@ final class ApiServer {
             // The Workbench: mail the app sent to the project's Mailpit.
             // The Inbox's queues: RabbitMQ queues and Kafka topics, their messages (looked at, never taken) and
             // readers.
-            config.routes.get("/api/v1/queues", ctx -> answer(ctx, queues.brokers()));
-            config.routes.get("/api/v1/queues/{service}", ctx -> answer(ctx, queues.queues(ctx.pathParam("service"))));
-            config.routes.get(
-                    "/api/v1/queues/{service}/{queue}/messages",
-                    ctx -> answer(
-                            ctx,
-                            queues.messages(
-                                    ctx.pathParam("service"),
-                                    ctx.pathParam("queue"),
-                                    parseIntOr(ctx.queryParam("max"), 20))));
-            config.routes.get(
-                    "/api/v1/queues/{service}/{queue}/readers",
-                    ctx -> answer(ctx, queues.readers(ctx.pathParam("service"), ctx.pathParam("queue"))));
-            config.routes.post(
-                    "/api/v1/queues/{service}/{queue}/publish",
-                    ctx -> answer(
-                            ctx,
-                            queues.publish(
-                                    ctx.pathParam("service"), ctx.pathParam("queue"), ctx.bodyAsClass(Map.class))));
+            if (extras) { // extras: RabbitMQ, Kafka and SQS queues
+                config.routes.get("/api/v1/queues", ctx -> answer(ctx, queues.brokers()));
+                config.routes.get(
+                        "/api/v1/queues/{service}", ctx -> answer(ctx, queues.queues(ctx.pathParam("service"))));
+                config.routes.get(
+                        "/api/v1/queues/{service}/{queue}/messages",
+                        ctx -> answer(
+                                ctx,
+                                queues.messages(
+                                        ctx.pathParam("service"),
+                                        ctx.pathParam("queue"),
+                                        parseIntOr(ctx.queryParam("max"), 20))));
+                config.routes.get(
+                        "/api/v1/queues/{service}/{queue}/readers",
+                        ctx -> answer(ctx, queues.readers(ctx.pathParam("service"), ctx.pathParam("queue"))));
+                config.routes.post(
+                        "/api/v1/queues/{service}/{queue}/publish",
+                        ctx -> answer(
+                                ctx,
+                                queues.publish(
+                                        ctx.pathParam("service"), ctx.pathParam("queue"), ctx.bodyAsClass(Map.class))));
+            }
             config.routes.get("/api/v1/mail", ctx -> answer(ctx, mail.catchers()));
             config.routes.get(
                     "/api/v1/mail/{service}/messages",
@@ -786,19 +826,23 @@ final class ApiServer {
                     ctx -> answer(ctx, requests.importPostman(ctx.bodyAsClass(Map.class))));
             config.routes.post(
                     "/api/v1/http/import/curl", ctx -> answer(ctx, HttpWorkbench.fromCurl(ctx.bodyAsClass(Map.class))));
-            // The mock server: fake routes served on a port of this machine.
-            config.routes.get("/api/v1/http/mock", ctx -> {
-                String after = Objects.requireNonNullElse(ctx.queryParam("after"), "0");
-                answer(ctx, mocks.overview(after.matches("\\d{1,12}") ? Long.parseLong(after) : 0));
-            });
-            config.routes.post("/api/v1/http/mock/routes", ctx -> answer(ctx, mocks.save(ctx.bodyAsClass(Map.class))));
-            config.routes.post(
-                    "/api/v1/http/mock/routes/{id}/delete", ctx -> answer(ctx, mocks.delete(ctx.pathParam("id"))));
-            config.routes.post("/api/v1/http/mock/start", ctx -> answer(ctx, mocks.start(ctx.bodyAsClass(Map.class))));
-            config.routes.post("/api/v1/http/mock/stop", ctx -> {
-                mocks.stop();
-                answer(ctx, mocks.overview(Long.MAX_VALUE));
-            });
+            if (extras) { // extras: the mock server
+                // The mock server: fake routes served on a port of this machine.
+                config.routes.get("/api/v1/http/mock", ctx -> {
+                    String after = Objects.requireNonNullElse(ctx.queryParam("after"), "0");
+                    answer(ctx, mocks.overview(after.matches("\\d{1,12}") ? Long.parseLong(after) : 0));
+                });
+                config.routes.post(
+                        "/api/v1/http/mock/routes", ctx -> answer(ctx, mocks.save(ctx.bodyAsClass(Map.class))));
+                config.routes.post(
+                        "/api/v1/http/mock/routes/{id}/delete", ctx -> answer(ctx, mocks.delete(ctx.pathParam("id"))));
+                config.routes.post(
+                        "/api/v1/http/mock/start", ctx -> answer(ctx, mocks.start(ctx.bodyAsClass(Map.class))));
+                config.routes.post("/api/v1/http/mock/stop", ctx -> {
+                    mocks.stop();
+                    answer(ctx, mocks.overview(Long.MAX_VALUE));
+                });
+            }
             // WebSocket connections of the API client: open, then poll ?after=<last seq seen>, send, close.
             config.routes.post(
                     "/api/v1/http/socket",
