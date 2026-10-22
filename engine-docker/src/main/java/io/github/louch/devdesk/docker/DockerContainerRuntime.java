@@ -9,6 +9,7 @@ import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.exception.NotModifiedException;
 import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.ContainerPort;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.HostConfig;
@@ -28,8 +29,11 @@ import io.github.louch.devdesk.core.process.StopResult;
 import io.github.louch.devdesk.core.process.StreamKind;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.Workload;
+import io.github.louch.devdesk.core.setup.FolderScan;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -58,6 +62,11 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         this.docker = docker;
     }
 
+    /** Database backups through the same Docker connection (dump tools run inside the database's container). */
+    public DockerDatabaseBackups backups() {
+        return new DockerDatabaseBackups(docker);
+    }
+
     /** The command override split like a shell would; a missing closing quote is a launch error, not a guess. */
     private static Optional<List<String>> arguments(Workload.Container c) throws LaunchException {
         if (c.command().isEmpty()) {
@@ -70,9 +79,8 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                         null)));
     }
 
-    /** {@code devdesk-<project>-<service>}, with only the characters Docker allows in names. */
     static String containerName(String project, String service) {
-        return ("devdesk-" + project + "-" + service).replaceAll("[^a-zA-Z0-9_.-]", "_");
+        return ContainerRuntime.containerName(project, service);
     }
 
     @Override
@@ -344,6 +352,97 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                 return exists(leftover.id()) ? "could not remove container " + leftover.id() : "stopped and removed";
             }
         };
+    }
+
+    /** Labels docker compose puts on its containers: the folder it was started in. */
+    private static final String COMPOSE_FOLDER_LABEL = "com.docker.compose.project.working_dir";
+
+    /**
+     * What Docker runs right now, for the setup wizard's scan: a database someone started by hand can become a card
+     * with the same settings and data. Only reads; nothing is stopped.
+     */
+    public List<FolderScan.RunningContainer> running() {
+        List<FolderScan.RunningContainer> found = new ArrayList<>();
+        docker.listContainersCmd().exec().forEach(c -> {
+            Map<String, String> labels = c.getLabels() == null ? Map.of() : c.getLabels();
+            List<String> ports = new ArrayList<>();
+            for (var p : c.getPorts() == null ? new ContainerPort[0] : c.getPorts()) {
+                // Docker lists IPv4 and IPv6 bindings separately; one "host:container" line is enough.
+                String line = p.getPublicPort() + ":" + p.getPrivatePort();
+                if (p.getPublicPort() != null && "tcp".equals(p.getType()) && !ports.contains(line)) {
+                    ports.add(line);
+                }
+            }
+            List<String> volumes = new ArrayList<>();
+            if (c.getMounts() != null) {
+                c.getMounts().stream()
+                        .filter(m -> m.getName() != null) // only named volumes have a name; bind mounts don't
+                        .forEach(m -> volumes.add(m.getName() + ":" + m.getDestination()));
+            }
+            Map<String, String> env = new LinkedHashMap<>();
+            try {
+                String[] vars =
+                        docker.inspectContainerCmd(c.getId()).exec().getConfig().getEnv();
+                for (String v : vars == null ? new String[0] : vars) {
+                    int eq = v.indexOf('=');
+                    // PATH, HOME… come from the image itself; only the variables someone chose are worth copying.
+                    if (eq > 0
+                            && !Set.of(
+                                            "PATH",
+                                            "HOME",
+                                            "HOSTNAME",
+                                            "LANG",
+                                            "GOSU_VERSION",
+                                            "PG_MAJOR",
+                                            "PG_VERSION",
+                                            "PGDATA",
+                                            "REDIS_VERSION",
+                                            "REDIS_DOWNLOAD_URL",
+                                            "REDIS_DOWNLOAD_SHA")
+                                    .contains(v.substring(0, eq))) {
+                        env.put(v.substring(0, eq), v.substring(eq + 1));
+                    }
+                }
+            } catch (DockerException e) {
+                // it stopped meanwhile: list it without its variables
+            }
+            found.add(new FolderScan.RunningContainer(
+                    c.getNames()[0].substring(1),
+                    c.getImage(),
+                    ports,
+                    env,
+                    volumes,
+                    labels.getOrDefault(COMPOSE_FOLDER_LABEL, ""),
+                    labels.containsKey(PROJECT_LABEL)));
+        });
+        return found;
+    }
+
+    /** The images Docker already has, as "name:tag" (what the doctor compares devdesk.yaml's images with). */
+    public Set<String> localImages() {
+        Set<String> tags = new HashSet<>();
+        docker.listImagesCmd().exec().forEach(i -> {
+            if (i.getRepoTags() != null) {
+                tags.addAll(List.of(i.getRepoTags()));
+            }
+        });
+        return tags;
+    }
+
+    /**
+     * The image id each reference ("postgres:18") points to on this machine now. A tag like ":latest" can point to a
+     * new image after a pull: comparing ids shows it. Images that aren't here are left out.
+     */
+    public Map<String, String> imageIds(java.util.Collection<String> images) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (String image : images) {
+            try {
+                out.put(image, docker.inspectImageCmd(image).exec().getId());
+            } catch (RuntimeException e) {
+                // not pulled (yet): nothing to compare
+            }
+        }
+        return out;
     }
 
     /** The underlying client, for this module's tests. */

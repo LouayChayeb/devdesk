@@ -64,6 +64,27 @@ public final class ProcNetListeners implements ListenerLookup {
                 .toList();
     }
 
+    /**
+     * Every listening TCP socket on the machine. Scans each process's fd/ once (not once per socket), so a busy
+     * machine costs one pass over /proc.
+     */
+    public List<Listener> allListeners() {
+        Map<Long, Long> ownerOfInode = new HashMap<>();
+        try (Stream<Path> all = Files.list(proc)) {
+            all.filter(p -> p.getFileName().toString().chars().allMatch(Character::isDigit))
+                    .map(p -> Long.parseLong(p.getFileName().toString()))
+                    .forEach(pid -> socketInodes(pid).forEach(inode -> ownerOfInode.put(inode, pid)));
+        } catch (IOException e) {
+            return List.of();
+        }
+        return tables(TCP_LISTEN).stream()
+                .map(s -> {
+                    Optional<Long> pid = Optional.ofNullable(ownerOfInode.get(s.inode()));
+                    return new Listener(s.port(), s.address(), s.uid(), pid, pid.flatMap(this::commandLine));
+                })
+                .toList();
+    }
+
     /** Every open TCP connection the given processes hold, in both directions. Same cheap scan as above. */
     public List<Connection> connectionsOf(Set<Long> pids) {
         if (pids.isEmpty()) {

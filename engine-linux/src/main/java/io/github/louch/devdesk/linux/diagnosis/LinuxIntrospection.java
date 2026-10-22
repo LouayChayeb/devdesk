@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /** Facts for diagnosis from /proc and the file system. Read-only: it never changes anything on the machine. */
@@ -34,6 +36,31 @@ public final class LinuxIntrospection implements Introspection {
     public List<Listener> listenersOf(Set<Long> pids) {
         return listeners.listenersOf(pids);
     }
+
+    @Override
+    public List<Listener> allListeners() {
+        return listeners.allListeners();
+    }
+
+    /**
+     * cgroup v2: /proc/<pid>/cgroup is "0::/user.slice/.../devdesk-<key>--<service>-<8hex>.scope" for a process
+     * DevDesk started (LinuxProcessRuntime names the scope). Children inherit the cgroup, so it covers them too.
+     */
+    @Override
+    public Optional<String> devdeskProjectOf(long pid) {
+        try {
+            return projectKeyIn(Files.readString(Path.of("/proc", Long.toString(pid), "cgroup")));
+        } catch (IOException e) {
+            return Optional.empty(); // gone, or another user's
+        }
+    }
+
+    static Optional<String> projectKeyIn(String cgroup) {
+        Matcher m = DEVDESK_SCOPE.matcher(cgroup);
+        return m.find() ? Optional.of(m.group(1)) : Optional.empty();
+    }
+
+    private static final Pattern DEVDESK_SCOPE = Pattern.compile("/devdesk-([A-Za-z0-9_.-]+?-[0-9a-f]{8})--");
 
     @Override
     public List<Connection> connectionsOf(Set<Long> pids) {

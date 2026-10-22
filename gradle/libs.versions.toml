@@ -10,6 +10,11 @@ picocli = "4.7.7"
 jackson = "3.2.3"
 javalin = "7.2.3"
 docker-java = "3.7.1"
+postgresql = "42.7.13"
+mariadb = "3.5.10"
+sqlite = "3.53.4.0"
+mongodb = "5.13.0"
+kafka = "4.4.0"
 # Must match the SLF4J 1.7 API that docker-java uses.
 slf4j = "1.7.36"
 # Javalin uses SLF4J 2, whose backends are found differently, so the daemon needs a 2.x backend.
@@ -30,6 +35,16 @@ docker-java-httpclient5 = { module = "com.github.docker-java:docker-java-transpo
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 slf4j2-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j2" }
 javalin = { module = "io.javalin:javalin", version.ref = "javalin" }
+# The official PostgreSQL JDBC driver (plain Java, no extra dependencies).
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+# MariaDB's JDBC driver: speaks to MariaDB and MySQL (one wire protocol). LGPL, used as an unchanged library.
+mariadb = { module = "org.mariadb.jdbc:mariadb-java-client", version.ref = "mariadb" }
+# SQLite in-process: the driver carries SQLite itself (native code for each OS inside the jar).
+sqlite = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
+# The official MongoDB driver (synchronous API), for the Workbench's document browser.
+mongodb-driver = { module = "org.mongodb:mongodb-driver-sync", version.ref = "mongodb" }
+# Apache Kafka's own Java client, for the Inbox's Kafka topics (Kafka has no HTTP API to use instead).
+kafka-clients = { module = "org.apache.kafka:kafka-clients", version.ref = "kafka" }
 jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
 jackson-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 

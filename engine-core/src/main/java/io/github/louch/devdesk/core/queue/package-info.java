@@ -1,0 +1,2 @@
+/** Message brokers of a project (RabbitMQ, Kafka): what's waiting in their queues and topics, and who reads them. */
+package io.github.louch.devdesk.core.queue;

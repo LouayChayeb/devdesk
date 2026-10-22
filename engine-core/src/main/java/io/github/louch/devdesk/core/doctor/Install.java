@@ -1,0 +1,54 @@
+package io.github.louch.devdesk.core.doctor;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.function.Function;
+
+/** How to install a tool or a project's packages, as commands to copy. Shown to the user, never run automatically. */
+public final class Install {
+
+    /** What each package manager leaves in node_modules after an install. */
+    public static final List<String> MARKERS =
+            List.of(".package-lock.json", ".modules.yaml", ".yarn-state.yml", ".yarn-integrity");
+
+    private Install() {}
+
+    /** @param version the version to install ("22"), or "" for any */
+    static String hint(String tool, String version) {
+        String v = version.isBlank() ? "" : " " + version;
+        return switch (tool) {
+            // Version managers let several versions live side by side: the usual way on a dev machine.
+            case "node" ->
+                "install Node" + v + " with nvm: nvm install" + (v.isEmpty() ? " --lts" : v) + " && nvm use"
+                        + (v.isEmpty() ? " --lts" : v);
+            case "python" ->
+                "install Python" + v + " with pyenv: pyenv install" + (v.isEmpty() ? " 3" : v)
+                        + ", or sudo apt install python3";
+            case "java" ->
+                v.isEmpty()
+                        ? "sudo apt install default-jdk, or use SDKMAN (sdk install java)"
+                        : "sudo apt install openjdk-" + version
+                                + "-jdk, or with SDKMAN: sdk list java, then sdk install java " + "<a " + version
+                                + " version>";
+            case "pnpm" -> "corepack enable pnpm (comes with Node)";
+            case "yarn" -> "corepack enable yarn (comes with Node)";
+            case "mvn" -> "sudo apt install maven, or use the project's ./mvnw if it has one";
+            case "gradle" -> "sudo apt install gradle, or use the project's ./gradlew if it has one";
+            default -> "install " + tool;
+        };
+    }
+
+    /** The install command matching the folder's lock file: each manager installs from its own. */
+    public static String nodeInstall(Function<String, Optional<String>> read) {
+        if (read.apply("pnpm-lock.yaml").isPresent()) {
+            return "pnpm install";
+        }
+        if (read.apply("yarn.lock").isPresent()) {
+            return "yarn install";
+        }
+        if (read.apply("bun.lock").or(() -> read.apply("bun.lockb")).isPresent()) {
+            return "bun install";
+        }
+        return read.apply("package-lock.json").isPresent() ? "npm ci" : "npm install";
+    }
+}

@@ -80,6 +80,16 @@ class ProjectSupervisorTest {
             }
 
             @Override
+            public List<Listener> allListeners() {
+                return List.of();
+            }
+
+            @Override
+            public Optional<String> devdeskProjectOf(long pid) {
+                return Optional.empty();
+            }
+
+            @Override
             public List<Connection> connectionsOf(Set<Long> pids) {
                 return List.of();
             }
@@ -162,6 +172,84 @@ class ProjectSupervisorTest {
 
         assertThat(states.values()).allMatch(st -> st instanceof ServiceState.Stopped);
         assertThat(runtime.stopped).containsExactly("web", "api", "db");
+    }
+
+    @Test
+    void stoppingOneServiceAlsoStopsWhatNeedsItButNotWhatItNeeds() throws Exception {
+        var s = supervisor(SHOP);
+        s.up().get(10, TimeUnit.SECONDS);
+
+        Map<String, ServiceState> states = s.stopService("api").get(10, TimeUnit.SECONDS);
+
+        assertThat(runtime.stopped).containsExactly("web", "api"); // web needs api; db doesn't
+        assertThat(states.get("db")).isInstanceOf(ServiceState.Healthy.class);
+        assertThat(states.get("web")).isInstanceOf(ServiceState.Stopped.class);
+    }
+
+    @Test
+    void startingOneServiceStartsWhatItNeedsFirst() throws Exception {
+        Map<String, ServiceState> states = supervisor(SHOP).startService("api").get(10, TimeUnit.SECONDS);
+
+        assertThat(runtime.started).containsExactly("db", "api"); // not web: nothing asked for it
+        assertThat(states.get("api")).isInstanceOf(ServiceState.Healthy.class);
+        assertThat(states.get("web")).isInstanceOf(ServiceState.Stopped.class);
+    }
+
+    @Test
+    void restartingAServiceRestartsItsDependentsToo() throws Exception {
+        var s = supervisor(SHOP);
+        s.up().get(10, TimeUnit.SECONDS);
+        runtime.started.clear();
+
+        Map<String, ServiceState> states = s.restartService("api").get(10, TimeUnit.SECONDS);
+
+        assertThat(runtime.stopped).containsExactly("web", "api");
+        assertThat(runtime.started).containsExactly("api", "web"); // db kept running
+        assertThat(states.get("web")).isInstanceOf(ServiceState.Running.class);
+    }
+
+    @Test
+    void reloadingAfterACodeChangeRestartsOnlyThatService() throws Exception {
+        var s = supervisor(SHOP);
+        s.up().get(10, TimeUnit.SECONDS);
+        runtime.started.clear();
+
+        Map<String, ServiceState> states = s.reloadService("api").get(10, TimeUnit.SECONDS);
+
+        assertThat(runtime.stopped).containsExactly("api"); // web keeps running and reconnects
+        assertThat(runtime.started).containsExactly("api");
+        assertThat(states.get("api")).isInstanceOf(ServiceState.Healthy.class);
+        assertThat(states.get("web")).isInstanceOf(ServiceState.Running.class);
+    }
+
+    @Test
+    void detailsShowStateSinceProbesAndEnvironmentSources() throws Exception {
+        var s = supervisor(SHOP);
+        s.up().get(10, TimeUnit.SECONDS);
+
+        var db = s.details("db").get(10, TimeUnit.SECONDS);
+
+        assertThat(db.state()).isInstanceOf(ServiceState.Healthy.class);
+        assertThat(db.since()).isNotNull();
+        assertThat(db.history().probes()).last().isInstanceOf(ProbeResult.Passed.class);
+        assertThat(db.environment())
+                .anySatisfy(v -> assertThat(v.source()).isEqualTo(ServiceEnvironment.Source.DEVDESK));
+    }
+
+    @Test
+    void aStoppedServiceIsNotRestartedAutomatically() throws Exception {
+        var s = supervisor("""
+                version: 1
+                services:
+                  worker: { command: serve, restart: always }
+                """);
+        s.up().get(10, TimeUnit.SECONDS);
+
+        s.stopService("worker").get(10, TimeUnit.SECONDS);
+        Thread.sleep(100); // longer than the 5 ms restart delay of these tests
+
+        assertThat(runtime.started).containsExactly("worker");
+        assertThat(s.snapshot().get().get("worker")).isInstanceOf(ServiceState.Stopped.class);
     }
 
     @Test

@@ -4,11 +4,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Reads a {@code .env} file: {@code KEY=value} lines, {@code #} comments, optional quotes, optional "export". */
-final class EnvFile {
+public final class EnvFile {
 
     private EnvFile() {}
 
-    static Map<String, String> parse(String content) {
+    public static Map<String, String> parse(String content) {
         Map<String, String> vars = new LinkedHashMap<>();
         for (String raw : content.split("\n")) {
             String line = raw.strip();

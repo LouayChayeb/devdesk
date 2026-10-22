@@ -4,9 +4,11 @@ import io.github.louch.devdesk.core.graph.DependencyCycleException;
 import io.github.louch.devdesk.core.graph.DependencyGraph;
 import io.github.louch.devdesk.core.project.Dependency;
 import io.github.louch.devdesk.core.project.HealthCheckSpec;
+import io.github.louch.devdesk.core.project.Profile;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.RestartPolicy;
 import io.github.louch.devdesk.core.project.ServiceSpec;
+import io.github.louch.devdesk.core.project.TaskSpec;
 import io.github.louch.devdesk.core.project.Workload;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -30,7 +32,10 @@ public final class ConfigParser {
 
     public static final String FILE_NAME = "devdesk.yaml";
 
-    private static final Set<String> TOP_KEYS = Set.of("version", "name", "env_files", "services");
+    private static final Set<String> TOP_KEYS = Set.of("version", "name", "env_files", "services", "profiles", "tasks");
+    private static final Set<String> TASK_KEYS =
+            Set.of("command", "directory", "environment", "needs", "description", "confirm");
+    private static final Set<String> PROFILE_KEYS = Set.of("env_files", "environment", "services");
     private static final Set<String> SERVICE_KEYS = Set.of(
             "command",
             "directory",
@@ -40,7 +45,11 @@ public final class ConfigParser {
             "health",
             "restart",
             "stop_grace_period",
-            "container");
+            "container",
+            "watch",
+            "test",
+            "per_branch",
+            "sleep_after");
     private static final Set<String> HEALTH_KEYS = Set.of(
             "type",
             "host",
@@ -129,13 +138,152 @@ public final class ConfigParser {
                     "expected at least one service (name: then its settings)");
         }
 
+        Map<String, Profile> profiles =
+                get(top, "profiles").map(p -> profiles(p, services.keySet())).orElse(Map.of());
+        Map<String, TaskSpec> tasks =
+                get(top, "tasks").map(t -> tasks(t, services.keySet())).orElse(Map.of());
+
         if (problems.isEmpty()) {
             checkNoCycle(services);
         }
         if (!problems.isEmpty()) {
             throw new ConfigException(problems);
         }
-        return new ProjectSpec(name, root, fileEnv, services);
+        return new ProjectSpec(name, root, fileEnv, services, profiles, tasks);
+    }
+
+    /** {@code tasks: { seed: { command, directory?, environment?, needs?: [db], description?, confirm? } }}. */
+    private Map<String, TaskSpec> tasks(YamlNode node, Set<String> serviceNames) {
+        Map<String, TaskSpec> out = new LinkedHashMap<>();
+        if (!(node instanceof YamlNode.Mapping m)) {
+            problem(node.location(), "tasks", "expected task names, like seed: then its command:");
+            return out;
+        }
+        m.entries().forEach((name, entry) -> {
+            String path = "tasks." + name;
+            if (!SERVICE_NAME.matcher(name).matches()) {
+                problem(entry.keyLocation(), path, "task names use lowercase letters, digits, - and _ (e.g. \"seed\")");
+            }
+            // A task is often only its command: "seed: python3 seed.py" is accepted too.
+            if (entry.value() instanceof YamlNode.Scalar) {
+                interpolated(entry.value(), path)
+                        .ifPresent(c ->
+                                out.put(name, new TaskSpec(name, c, root, Map.of(), List.of(), "", Optional.empty())));
+                return;
+            }
+            if (!(entry.value() instanceof YamlNode.Mapping t)) {
+                problem(
+                        entry.value().location(),
+                        path,
+                        "expected command: and its settings, found " + YamlNode.describe(entry.value()));
+                return;
+            }
+            checkKeys(t, path, TASK_KEYS);
+            Optional<String> command = required(t, "command", path).flatMap(c -> interpolated(c, path + ".command"));
+            Path directory = get(t, "directory")
+                    .flatMap(d -> text(d, path + ".directory"))
+                    .map(d -> root.resolve(d).normalize())
+                    .orElse(root);
+            Map<String, String> environment = new LinkedHashMap<>();
+            get(t, "environment").ifPresent(e -> environment(e, path + ".environment", environment));
+            List<String> needs = new ArrayList<>();
+            get(t, "needs")
+                    .ifPresent(n -> items(n, path + ".needs")
+                            .forEach(item -> text(item, path + ".needs").ifPresent(svc -> {
+                                if (serviceNames.contains(svc)) {
+                                    needs.add(svc);
+                                } else {
+                                    problem(
+                                            item.location(),
+                                            path + ".needs",
+                                            "no service \"" + svc + "\" in this project"
+                                                    + Suggestions.didYouMean(svc, List.copyOf(serviceNames)));
+                                }
+                            })));
+            String description = get(t, "description")
+                    .flatMap(d -> text(d, path + ".description"))
+                    .orElse("");
+            Optional<String> confirm = get(t, "confirm").flatMap(c -> text(c, path + ".confirm"));
+            command.ifPresent(
+                    c -> out.put(name, new TaskSpec(name, c, directory, environment, needs, description, confirm)));
+        });
+        return out;
+    }
+
+    /**
+     * {@code profiles: { demo: { env_files, environment, services: { api: { environment } } } }}. A profile's own env
+     * files are read here, like the project's, and may be used in its values as ${VAR}.
+     */
+    private Map<String, Profile> profiles(YamlNode node, Set<String> serviceNames) {
+        Map<String, Profile> out = new LinkedHashMap<>();
+        if (!(node instanceof YamlNode.Mapping m)) {
+            problem(node.location(), "profiles", "expected profile names, like demo: then its settings");
+            return out;
+        }
+        m.entries().forEach((name, entry) -> {
+            String path = "profiles." + name;
+            if (!SERVICE_NAME.matcher(name).matches()) {
+                problem(
+                        entry.keyLocation(),
+                        path,
+                        "profile names use lowercase letters, digits, - and _ (e.g. \"demo\")");
+            }
+            if (!(entry.value() instanceof YamlNode.Mapping p)) {
+                problem(
+                        entry.value().location(),
+                        path,
+                        "expected settings like environment:, found " + YamlNode.describe(entry.value()));
+                return;
+            }
+            checkKeys(p, path, PROFILE_KEYS);
+            Map<String, String> before = new HashMap<>(env);
+            Map<String, String> fromFiles = new LinkedHashMap<>();
+            get(p, "env_files").ifPresent(files -> {
+                for (YamlNode item : items(files, path + ".env_files")) {
+                    text(item, path + ".env_files")
+                            .ifPresent(file -> readFile.apply(file)
+                                    .ifPresentOrElse(
+                                            content -> fromFiles.putAll(EnvFile.parse(content)),
+                                            () -> problem(
+                                                    item.location(),
+                                                    path + ".env_files",
+                                                    "file \"" + file + "\" not found in " + root)));
+                }
+            });
+            env.putAll(fromFiles); // the profile's own files count for ${VAR} in its values
+            Map<String, String> environment = new LinkedHashMap<>(fromFiles);
+            get(p, "environment").ifPresent(e -> environment(e, path + ".environment", environment));
+            Map<String, Map<String, String>> perService = new LinkedHashMap<>();
+            get(p, "services").ifPresent(sv -> {
+                if (!(sv instanceof YamlNode.Mapping list)) {
+                    problem(sv.location(), path + ".services", "expected service names, like api: then environment:");
+                    return;
+                }
+                list.entries().forEach((service, e) -> {
+                    String spath = path + ".services." + service;
+                    if (!serviceNames.contains(service)) {
+                        problem(
+                                e.keyLocation(),
+                                spath,
+                                "no service \"" + service + "\" in this project"
+                                        + Suggestions.didYouMean(service, List.copyOf(serviceNames)));
+                        return;
+                    }
+                    Map<String, String> own = new LinkedHashMap<>();
+                    if (e.value() instanceof YamlNode.Mapping sm) {
+                        checkKeys(sm, spath, Set.of("environment"));
+                        get(sm, "environment").ifPresent(x -> environment(x, spath + ".environment", own));
+                    } else {
+                        problem(e.value().location(), spath, "expected environment: under the service");
+                    }
+                    perService.put(service, own);
+                });
+            });
+            env.clear();
+            env.putAll(before);
+            out.put(name, new Profile(name, environment, perService));
+        });
+        return out;
     }
 
     private void envFiles(YamlNode node) {
@@ -227,8 +375,63 @@ public final class ConfigParser {
                     path + ".health",
                     "type: docker reads a container's own HEALTHCHECK; this service isn't a container");
         }
-        return workload.map(
-                w -> new ServiceSpec(name, w, directory, environment, dependsOn, ports, health, restart, grace));
+        List<Path> watch =
+                get(s, "watch").map(w -> watch(w, path + ".watch", directory)).orElse(List.of());
+        // Runs in the service's folder like its command: "npm test", "python3 -m pytest -q".
+        Optional<String> test = get(s, "test").flatMap(t -> interpolated(t, path + ".test"));
+        // per_branch: true keeps this service's data volumes apart per git branch (see BranchStacks).
+        boolean perBranch = get(s, "per_branch")
+                .flatMap(b -> text(b, path + ".per_branch"))
+                .map("true"::equals)
+                .orElse(false);
+        // sleep_after: 15m stops the service when nobody used it that long; the next connection starts it again.
+        Optional<Duration> sleepAfter = get(s, "sleep_after").flatMap(d -> duration(d, path + ".sleep_after"));
+        if (sleepAfter.isPresent() && ports.isEmpty()) {
+            problem(
+                    get(s, "sleep_after").orElseThrow().location(),
+                    path + ".sleep_after",
+                    "a sleeping service is woken by a connection to its port: give it ports: first");
+        }
+        return workload.map(w -> new ServiceSpec(
+                name,
+                w,
+                directory,
+                environment,
+                dependsOn,
+                ports,
+                health,
+                restart,
+                grace,
+                watch,
+                test,
+                perBranch,
+                sleepAfter));
+    }
+
+    /**
+     * {@code watch: true} (the service's folder) or {@code watch: [src, ../shared, app.py]} (folders or single files,
+     * relative to it). Changes there restart the service, like nodemon, for any language.
+     */
+    private List<Path> watch(YamlNode node, String path, Path directory) {
+        if (node instanceof YamlNode.Scalar s && ("true".equals(s.text()) || "false".equals(s.text()))) {
+            return "true".equals(s.text()) ? List.of(directory) : List.of();
+        }
+        List<Path> folders = new ArrayList<>();
+        for (YamlNode item : items(node, path)) {
+            text(item, path).ifPresent(t -> {
+                Path folder = directory.resolve(t).normalize();
+                if (!folder.startsWith(root)) {
+                    problem(
+                            item.location(),
+                            path,
+                            "\"" + t + "\" is outside the project folder: only the project's own"
+                                    + " files are watched");
+                } else {
+                    folders.add(folder);
+                }
+            });
+        }
+        return folders;
     }
 
     /** {@code container: { image, ports, volumes, environment, command }}. Its environment joins the service's. */

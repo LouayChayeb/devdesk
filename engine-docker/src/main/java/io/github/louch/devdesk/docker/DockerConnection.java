@@ -65,7 +65,8 @@ public final class DockerConnection {
         }
     }
 
-    static String socketPath(Map<String, String> env) {
+    /** Where Docker's (or Podman's) API socket is, as {@code unix:///path}; it may not exist. */
+    public static String socketPath(Map<String, String> env) {
         String host = env.getOrDefault("DOCKER_HOST", "");
         if (host.startsWith("unix://")) {
             return host;

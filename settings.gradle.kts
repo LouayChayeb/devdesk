@@ -20,6 +20,7 @@ include(
     "engine-core", // pure domain, depends on nothing
     "engine-linux", // Linux adapters for core's ports
     "engine-docker", // Docker/Podman adapter for core's ports
+    "engine-data", // Workbench adapters: databases (JDBC), later Redis and HTTP
     "daemon", // wires everything, later serves the HTTP API
     "cli", // picocli client (runs the engine in-process until M3)
 )

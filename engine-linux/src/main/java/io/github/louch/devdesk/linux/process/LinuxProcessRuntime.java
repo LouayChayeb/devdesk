@@ -10,6 +10,7 @@ import io.github.louch.devdesk.core.process.Signal;
 import io.github.louch.devdesk.core.process.StreamKind;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -276,7 +277,10 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
      */
     private static boolean cgroupIsGone(Exception e) {
         Throwable cause = e instanceof UncheckedIOException u ? u.getCause() : e;
-        return cause instanceof NoSuchFileException || "No such device".equals(cause.getMessage());
+        // ENODEV: the scope directory still shows but the kernel already tore the cgroup down. It surfaces either when
+        // opening (FileSystemException, errno text in getReason()) or mid-read (plain IOException).
+        String reason = cause instanceof FileSystemException f ? f.getReason() : cause.getMessage();
+        return cause instanceof NoSuchFileException || "No such device".equals(reason);
     }
 
     /**

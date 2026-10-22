@@ -14,6 +14,12 @@ public interface Introspection extends ListenerLookup {
     /** Every TCP port the given processes listen on. */
     List<Listener> listenersOf(Set<Long> pids);
 
+    /** Every listening TCP socket on the machine; for other users' sockets only the uid is known. */
+    List<Listener> allListeners();
+
+    /** The DevDesk project key a process was started under (its systemd scope says it), if any. */
+    Optional<String> devdeskProjectOf(long pid);
+
     /** Every open TCP connection the given processes hold (both directions). */
     List<Connection> connectionsOf(Set<Long> pids);
 

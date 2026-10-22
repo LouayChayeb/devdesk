@@ -7,7 +7,7 @@ import java.util.Map;
  * A YAML value that remembers where it was written. Jackson's own tree forgets positions, but error messages need
  * them ("devdesk.yaml:12:5: ...").
  */
-sealed interface YamlNode {
+public sealed interface YamlNode {
 
     Location location();
 
@@ -19,7 +19,7 @@ sealed interface YamlNode {
 
     /** Text, number, boolean or empty. YAML scalars are kept as text; the parser decides what they must be. */
     record Scalar(String text, Location location) implements YamlNode {
-        boolean isNull() {
+        public boolean isNull() {
             return text == null;
         }
     }

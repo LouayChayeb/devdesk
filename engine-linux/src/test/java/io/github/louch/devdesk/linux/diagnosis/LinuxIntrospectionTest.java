@@ -40,4 +40,23 @@ class LinuxIntrospectionTest {
             assertThat(ports).contains(a.getLocalPort(), b.getLocalPort());
         }
     }
+
+    @Test
+    void devdeskScopeNameGivesTheProjectKey() {
+        String cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
+                + "devdesk-three-tier-70fadd7e--db-0b67f03f.scope\n";
+
+        assertThat(LinuxIntrospection.projectKeyIn(cgroup)).contains("three-tier-70fadd7e");
+        assertThat(LinuxIntrospection.projectKeyIn("0::/init.scope\n")).isEmpty();
+    }
+
+    @Test
+    void allListenersIncludesOurOwnSocketWithItsPid() throws Exception {
+        try (var server = new java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress())) {
+            assertThat(system.allListeners()).anySatisfy(l -> {
+                assertThat(l.port()).isEqualTo(server.getLocalPort());
+                assertThat(l.pid()).contains(ProcessHandle.current().pid());
+            });
+        }
+    }
 }

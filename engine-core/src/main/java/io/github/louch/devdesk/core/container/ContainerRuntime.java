@@ -13,6 +13,14 @@ import java.util.function.Consumer;
 public interface ContainerRuntime {
 
     /**
+     * {@code devdesk-<project>-<service>}, with only the characters Docker allows in names. Health checks written by
+     * the setup wizard ({@code docker exec <name> ...}) rely on it, so every runtime must name containers this way.
+     */
+    static String containerName(String project, String service) {
+        return ("devdesk-" + project + "-" + service).replaceAll("[^a-zA-Z0-9_.-]", "_");
+    }
+
+    /**
      * Pulls the image if needed (progress goes to {@code output}), creates and starts the container, and streams its
      * logs to {@code output}. Fails with a plain-words reason (image not found, port taken, Docker not running...).
      */

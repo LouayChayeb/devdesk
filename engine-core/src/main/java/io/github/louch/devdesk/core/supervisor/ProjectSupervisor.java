@@ -39,6 +39,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -71,13 +72,12 @@ public final class ProjectSupervisor implements AutoCloseable {
     private static final int HISTORY_LINES = 50;
 
     private static final int HISTORY_ENTRIES = 10;
+    /** The app's drawer shows the last 30 health results as a strip of ticks. */
+    private static final int PROBES_KEPT = 30;
     /** At one sample every 2 s, half an hour of CPU/memory per service. */
     private static final int RESOURCE_SAMPLES_KEPT = 900;
     /** How often "slow" problems (like memory that keeps growing) are looked for in running services. */
     private static final Duration WATCH_EVERY = Duration.ofSeconds(30);
-    /** Set unless the user overrides them: most tools then print immediately and keep their colours. */
-    private static final Map<String, String> OUTPUT_FRIENDLY_DEFAULTS =
-            Map.of("PYTHONUNBUFFERED", "1", "FORCE_COLOR", "1");
 
     private final ProjectSpec project;
     private final DependencyGraph graph;
@@ -102,9 +102,19 @@ public final class ProjectSupervisor implements AutoCloseable {
 
     // ---- actor-confined state ----
     private final Map<String, Service> services = new LinkedHashMap<>();
-    private final List<CompletableFuture<Map<String, ServiceState>>> waitingForUp = new ArrayList<>();
-    private final List<CompletableFuture<Map<String, ServiceState>>> waitingForDown = new ArrayList<>();
-    private boolean shuttingDown;
+    /** A caller waiting for some services to settle (after a start) or to stop. */
+    private record Waiter(Set<String> services, CompletableFuture<Map<String, ServiceState>> done) {}
+
+    private final List<Waiter> waitingForUp = new ArrayList<>();
+    private final List<Waiter> waitingForDown = new ArrayList<>();
+    /**
+     * Services DevDesk was asked to stop and must keep stopped: no start, no automatic restart. {@link #down()} puts
+     * every service here; "stop api" puts api and what needs it. A start request takes them out again.
+     */
+    private final Set<String> keptStopped = new LinkedHashSet<>();
+    /** Services being reloaded (restart on save): they may stop while what needs them keeps running. Actor-only. */
+    private final Set<String> reloading = new LinkedHashSet<>();
+
     private boolean evaluating;
     private int diagnosesRunning;
     private long sequence;
@@ -114,6 +124,9 @@ public final class ProjectSupervisor implements AutoCloseable {
     private static final class Service {
         final ServiceSpec spec;
         ServiceState state = new ServiceState.Stopped();
+        /** When it entered {@link #state}: "healthy since 10:41". */
+        Instant since;
+
         Optional<Handle> handle = Optional.empty();
         HealthTracker health;
         String lastProbe = "";
@@ -135,8 +148,9 @@ public final class ProjectSupervisor implements AutoCloseable {
         Instant lastUsageAt = Instant.EPOCH;
         String lastWatchFindings = "";
 
-        Service(ServiceSpec spec) {
+        Service(ServiceSpec spec, Instant now) {
             this.spec = spec;
+            this.since = now;
         }
     }
 
@@ -193,7 +207,7 @@ public final class ProjectSupervisor implements AutoCloseable {
         this.listener = listener;
         this.actor = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("project-" + project.name()).daemon().factory());
-        project.services().values().forEach(s -> services.put(s.name(), new Service(s)));
+        project.services().values().forEach(s -> services.put(s.name(), new Service(s, clock.instant())));
         long every = settings.sampleInterval().toMillis();
         actor.scheduleWithFixedDelay(() -> onActorNow(this::sampleResources), every, every, TimeUnit.MILLISECONDS);
     }
@@ -203,26 +217,96 @@ public final class ProjectSupervisor implements AutoCloseable {
      * completed, or failed in a way that won't fix itself (blocked, crashed with no restart, crash loop...).
      */
     public CompletableFuture<Map<String, ServiceState>> up() {
+        return start(services.keySet());
+    }
+
+    /** Stops every service, dependents before their dependencies. Completes when all are stopped. */
+    public CompletableFuture<Map<String, ServiceState>> down() {
+        return stop(services.keySet());
+    }
+
+    /** Starts one service and what it needs (starting api starts db first if db isn't running). */
+    public CompletableFuture<Map<String, ServiceState>> startService(String name) {
+        return start(graph.withDependencies(name));
+    }
+
+    /**
+     * Stops one service and everything that needs it, dependents first: leaving web running without its api would
+     * only turn web's errors into a mystery.
+     */
+    public CompletableFuture<Map<String, ServiceState>> stopService(String name) {
+        return stop(withDependents(name));
+    }
+
+    /** Stops the service and its dependents, then starts them all again (with whatever they need). */
+    public CompletableFuture<Map<String, ServiceState>> restartService(String name) {
+        Set<String> affected = withDependents(name);
+        Set<String> again = new LinkedHashSet<>(affected);
+        affected.forEach(n -> again.addAll(graph.withDependencies(n)));
+        return stop(affected).thenCompose(stopped -> start(again));
+    }
+
+    /**
+     * Restarts only this service, to load changed code (restart on save). The services that need it keep running and
+     * reconnect, like with nodemon: restarting all of them on every save would make editing painfully slow.
+     */
+    public CompletableFuture<Map<String, ServiceState>> reloadService(String name) {
+        return CompletableFuture.runAsync(() -> reloading.add(name), actor)
+                .thenCompose(marked -> stop(Set.of(name)))
+                .thenCompose(stopped -> CompletableFuture.runAsync(() -> reloading.remove(name), actor))
+                .thenCompose(unmarked -> start(Set.of(name)));
+    }
+
+    /**
+     * Auto-sleep: stops only this service to free its memory. What needs it keeps running (like during a reload) and
+     * finds it again when it wakes, which is a plain {@link #wakeService}.
+     */
+    public CompletableFuture<Map<String, ServiceState>> sleepService(String name) {
+        return CompletableFuture.runAsync(() -> reloading.add(name), actor)
+                .thenCompose(marked -> stop(Set.of(name)))
+                .thenCompose(stopped -> CompletableFuture.supplyAsync(
+                        () -> {
+                            reloading.remove(name);
+                            return stopped;
+                        },
+                        actor));
+    }
+
+    /** Starts a sleeping service again (only it: what it needs is still running). */
+    public CompletableFuture<Map<String, ServiceState>> wakeService(String name) {
+        return start(Set.of(name));
+    }
+
+    private Set<String> withDependents(String name) {
+        Set<String> result = new LinkedHashSet<>(graph.dependentsOf(name));
+        result.add(name);
+        return result;
+    }
+
+    private CompletableFuture<Map<String, ServiceState>> start(Set<String> names) {
         CompletableFuture<Map<String, ServiceState>> done = new CompletableFuture<>();
+        Set<String> targets = Set.copyOf(names);
         onActor(() -> {
-            shuttingDown = false;
-            waitingForUp.add(done);
+            keptStopped.removeAll(targets);
+            waitingForUp.add(new Waiter(targets, done));
             for (String name :
                     graph.startLevels().stream().flatMap(List::stream).toList()) {
-                apply(services.get(name), new ServiceEvent.StartRequested(), "start requested");
+                if (targets.contains(name)) {
+                    apply(services.get(name), new ServiceEvent.StartRequested(), "start requested");
+                }
             }
             evaluate();
         });
         return done;
     }
 
-    /** Stops every service, dependents before their dependencies. Completes when all are stopped. */
-    public CompletableFuture<Map<String, ServiceState>> down() {
+    private CompletableFuture<Map<String, ServiceState>> stop(Set<String> names) {
         CompletableFuture<Map<String, ServiceState>> done = new CompletableFuture<>();
+        Set<String> targets = Set.copyOf(names);
         onActor(() -> {
-            shuttingDown = true;
-            waitingForDown.add(done);
-            services.values().forEach(ProjectSupervisor::cancelRestart);
+            keptStopped.addAll(targets);
+            waitingForDown.add(new Waiter(targets, done));
+            targets.forEach(n -> cancelRestart(services.get(n)));
             evaluate();
         });
         return done;
@@ -257,6 +341,27 @@ public final class ProjectSupervisor implements AutoCloseable {
                         runnable -> Thread.ofVirtual().start(runnable));
     }
 
+    /**
+     * Everything the app's service drawer shows about one service: state, history (probes, resources) and its
+     * processes and environment.
+     */
+    public record ServiceDetails(
+            ServiceState state, Instant since, ServiceHistory history, List<ServiceEnvironment.Variable> environment) {}
+
+    /** Details of one service, with its PIDs right now (in {@code history().pids()}). */
+    public CompletableFuture<ServiceDetails> details(String name) {
+        return pids().thenApplyAsync(
+                        pids -> {
+                            Service s = services.get(name);
+                            return new ServiceDetails(
+                                    s.state,
+                                    s.since,
+                                    historyOf(s, pids.getOrDefault(name, Set.of())),
+                                    ServiceEnvironment.of(project, s.spec, baseEnvironment));
+                        },
+                        actor);
+    }
+
     /** The current state of every service. */
     public CompletableFuture<Map<String, ServiceState>> snapshot() {
         return CompletableFuture.supplyAsync(this::states, actor);
@@ -278,6 +383,7 @@ public final class ProjectSupervisor implements AutoCloseable {
             return;
         }
         s.state = to;
+        s.since = clock.instant();
         listener.accept(new ProjectEvent.StateChanged(++sequence, s.spec.name(), from, to, reason, clock.instant()));
         entered(s, to);
         evaluate();
@@ -338,7 +444,8 @@ public final class ProjectSupervisor implements AutoCloseable {
         try {
             boolean changed = true;
             while (changed) {
-                changed = shuttingDown ? stopWhatCanStop() : startWhatCanStart();
+                // Stops first: a service that must stay stopped must never be started in the same pass.
+                changed = stopWhatCanStop() | startWhatCanStart(); // non-short-circuit: both always run
             }
         } finally {
             evaluating = false;
@@ -349,7 +456,7 @@ public final class ProjectSupervisor implements AutoCloseable {
     private boolean startWhatCanStart() {
         boolean changed = false;
         for (Service s : services.values()) {
-            if (s.state instanceof ServiceState.WaitingDeps) {
+            if (s.state instanceof ServiceState.WaitingDeps && !keptStopped.contains(s.spec.name())) {
                 Optional<ServiceEvent> verdict = dependencyVerdict(s);
                 if (verdict.isPresent()) {
                     String reason = verdict.get() instanceof ServiceEvent.DependencyFailed f
@@ -367,9 +474,13 @@ public final class ProjectSupervisor implements AutoCloseable {
     private boolean stopWhatCanStop() {
         boolean changed = false;
         for (String name : graph.stopOrder()) {
+            if (!keptStopped.contains(name)) {
+                continue;
+            }
             Service s = services.get(name);
-            boolean dependentsDown =
-                    graph.dependentsOf(name).stream().map(services::get).noneMatch(d -> d.state.isActive());
+            // Normally dependents stop first. A reload is the exception: web keeps running while api reloads.
+            boolean dependentsDown = reloading.contains(name)
+                    || graph.dependentsOf(name).stream().map(services::get).noneMatch(d -> d.state.isActive());
             if (!(s.state instanceof ServiceState.Stopped)
                     && !(s.state instanceof ServiceState.Stopping)
                     && dependentsDown) {
@@ -472,7 +583,7 @@ public final class ProjectSupervisor implements AutoCloseable {
                     case Workload.Container c ->
                         new Handle.Container(containers.start(
                                 new ContainerLaunchSpec(
-                                        project.name(), project.key(), s.spec.name(), c, containerEnvironment(s)),
+                                        project.name(), project.key(), s.spec.name(), c, environment(s)),
                                 output));
                 };
                 onActor(() -> onLaunched(s, handle));
@@ -541,18 +652,7 @@ public final class ProjectSupervisor implements AutoCloseable {
     }
 
     private Map<String, String> environment(Service s) {
-        Map<String, String> env = new LinkedHashMap<>(OUTPUT_FRIENDLY_DEFAULTS);
-        env.putAll(baseEnvironment); // later wins: login env, then env_files, then the service's own block
-        env.putAll(project.environment());
-        env.putAll(s.spec.environment());
-        return env;
-    }
-
-    /** Containers get only what the project declares: the host's environment (and its secrets) stays outside. */
-    private Map<String, String> containerEnvironment(Service s) {
-        Map<String, String> env = new LinkedHashMap<>(project.environment());
-        env.putAll(s.spec.environment());
-        return env;
+        return ServiceEnvironment.values(project, s.spec, baseEnvironment);
     }
 
     // ---- stopping ----
@@ -626,7 +726,7 @@ public final class ProjectSupervisor implements AutoCloseable {
             return; // the service stopped or restarted while this probe was running
         }
         s.lastProbe = result.detail();
-        remember(s.probes, result, HISTORY_ENTRIES);
+        remember(s.probes, result, PROBES_KEPT);
         s.health.record(result, clock.instant()).ifPresent(e -> apply(s, e, result.detail()));
         if (s.state.isActive() && !(s.state instanceof ServiceState.Stopping)) {
             scheduleProbe(s, s.spec.health().timing().interval());
@@ -643,7 +743,7 @@ public final class ProjectSupervisor implements AutoCloseable {
     // ---- restarts ----
 
     private void restartIfWanted(Service s, ExitStatus exit) {
-        boolean wanted = !shuttingDown
+        boolean wanted = !keptStopped.contains(s.spec.name())
                 && switch (s.spec.restart()) {
                     case NO -> false;
                     case ON_FAILURE -> exit.code() != 0;
@@ -834,17 +934,26 @@ public final class ProjectSupervisor implements AutoCloseable {
     // ---- plumbing ----
 
     private void completeWaiters() {
-        if (!waitingForUp.isEmpty()
-                && diagnosesRunning == 0
-                && services.values().stream().allMatch(this::settled)) {
-            waitingForUp.forEach(f -> f.complete(states()));
-            waitingForUp.clear();
-        }
-        if (!waitingForDown.isEmpty()
-                && services.values().stream().allMatch(s -> s.state instanceof ServiceState.Stopped)) {
-            waitingForDown.forEach(f -> f.complete(states()));
-            waitingForDown.clear();
-        }
+        waitingForUp.removeIf(w -> {
+            // A service stopped again before it settled counts as done: nobody should wait for it forever.
+            boolean ready = diagnosesRunning == 0
+                    && w.services().stream()
+                            .map(services::get)
+                            .allMatch(s -> settled(s)
+                                    || keptStopped.contains(s.spec.name()) && s.state instanceof ServiceState.Stopped);
+            if (ready) {
+                w.done().complete(states());
+            }
+            return ready;
+        });
+        waitingForDown.removeIf(w -> {
+            boolean ready =
+                    w.services().stream().map(services::get).allMatch(s -> s.state instanceof ServiceState.Stopped);
+            if (ready) {
+                w.done().complete(states());
+            }
+            return ready;
+        });
     }
 
     /** A state that won't change unless something new happens (a crash, a health change, a user action). */
@@ -878,8 +987,8 @@ public final class ProjectSupervisor implements AutoCloseable {
             task.run();
         } catch (RuntimeException e) {
             listener.accept(new ProjectEvent.Warning("devdesk", "internal error (a bug, please report it): " + e));
-            waitingForUp.forEach(f -> f.completeExceptionally(e));
-            waitingForDown.forEach(f -> f.completeExceptionally(e));
+            waitingForUp.forEach(w -> w.done().completeExceptionally(e));
+            waitingForDown.forEach(w -> w.done().completeExceptionally(e));
             waitingForUp.clear();
             waitingForDown.clear();
         }

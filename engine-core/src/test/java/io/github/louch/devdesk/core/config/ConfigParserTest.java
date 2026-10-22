@@ -239,4 +239,96 @@ class ConfigParserTest {
                   api: { command: x, depends_on: { db: { condition: healthy } } }
                 """)).contains("\"api\" waits for \"db\" to be healthy, but \"db\" has no health check");
     }
+
+    @Test
+    void profilesOverrideSettingsForEveryServiceOrOne() throws Exception {
+        var project = ConfigParser.parse(
+                """
+                version: 1
+                services:
+                  api: { command: node api.js, environment: { MAIL_MODE: smtp, SEED: none } }
+                  web: { command: node web.js }
+                profiles:
+                  demo:
+                    env_files: [.env.demo]
+                    environment: { MAIL_MODE: inbox }
+                    services:
+                      api: { environment: { SEED: "${DEMO_SEED}" } }
+                """,
+                Path.of("/p"),
+                Map.of(),
+                f -> f.equals(".env.demo") ? Optional.of("DEMO_SEED=shop\n") : Optional.empty());
+
+        var demo = project.profiles().get("demo").applyTo(project);
+
+        assertThat(project.services().get("api").environment()).containsEntry("MAIL_MODE", "smtp");
+        assertThat(demo.services().get("api").environment())
+                .containsEntry("MAIL_MODE", "inbox") // the profile beats the service's own value
+                .containsEntry("SEED", "shop");
+        assertThat(demo.environment()).containsEntry("MAIL_MODE", "inbox").containsEntry("DEMO_SEED", "shop");
+        assertThat(demo.services().get("web").environment()).isEmpty();
+    }
+
+    @Test
+    void aProfileForAServiceThatDoesntExistIsAMistake() {
+        ConfigException e = catchThrowableOfType(
+                ConfigException.class,
+                () -> ConfigParser.parse(
+                        "version: 1\nservices:\n  api: { command: x }\nprofiles:\n  demo:\n    services:\n"
+                                + "      apx: { environment: { A: b } }\n",
+                        Path.of("/p"),
+                        Map.of(),
+                        f -> Optional.empty()));
+
+        assertThat(e.problems()).singleElement().satisfies(p -> {
+            assertThat(p.path()).isEqualTo("profiles.demo.services.apx");
+            assertThat(p.message()).startsWith("no service \"apx\" in this project");
+        });
+    }
+
+    @Test
+    void tasksAreOneOffCommandsThatMayNeedServices() throws Exception {
+        var project = ConfigParser.parse("""
+                version: 1
+                services:
+                  db: { container: { image: postgres:18 } }
+                  api: { command: node api.js, directory: api }
+                tasks:
+                  seed:
+                    command: python3 seed.py
+                    directory: api
+                    needs: [db]
+                    environment: { ROWS: "50" }
+                    description: Add demo orders
+                  lint: npm run lint
+                  reset:
+                    command: ./reset.sh
+                    confirm: This deletes all data.
+                """, Path.of("/p"), Map.of(), f -> Optional.empty());
+
+        assertThat(project.tasks()).containsOnlyKeys("seed", "lint", "reset");
+        var seed = project.tasks().get("seed");
+        assertThat(seed.command()).isEqualTo("python3 seed.py");
+        assertThat(seed.directory()).isEqualTo(Path.of("/p/api"));
+        assertThat(seed.needs()).containsExactly("db");
+        assertThat(seed.environment()).containsEntry("ROWS", "50");
+        assertThat(project.tasks().get("lint").directory()).isEqualTo(Path.of("/p"));
+        assertThat(project.tasks().get("reset").confirm()).contains("This deletes all data.");
+    }
+
+    @Test
+    void aTaskNeedingAServiceThatDoesntExistIsAMistake() {
+        ConfigException e = catchThrowableOfType(
+                ConfigException.class,
+                () -> ConfigParser.parse(
+                        "version: 1\nservices:\n  db: { command: x }\ntasks:\n  seed: { command: y, needs: [dv] }\n",
+                        Path.of("/p"),
+                        Map.of(),
+                        f -> Optional.empty()));
+
+        assertThat(e.problems()).singleElement().satisfies(p -> {
+            assertThat(p.path()).isEqualTo("tasks.seed.needs");
+            assertThat(p.message()).contains("no service \"dv\"").contains("db");
+        });
+    }
 }

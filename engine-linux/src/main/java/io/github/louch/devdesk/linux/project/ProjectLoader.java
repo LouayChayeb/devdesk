@@ -41,15 +41,25 @@ public final class ProjectLoader {
             return new Result.Missing("no " + path.getFileName() + " in " + path.getParent()
                     + ". Run DevDesk in a project folder, or point to the file with -f path/to/devdesk.yaml");
         }
-        Path root = path.getParent();
         try {
-            String content = Files.readString(path);
+            return loadText(path.getParent(), Files.readString(path), env);
+        } catch (IOException e) {
+            return new Result.Missing("could not read " + path + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Loads devdesk.yaml {@code content} as if it were saved in {@code folder}: the setup wizard's test run, before
+     * anything is written. Env files and relative paths resolve against the folder like for a saved file.
+     */
+    public static Result loadText(Path folder, String content, Map<String, String> env) {
+        Path root = folder.toAbsolutePath().normalize();
+        Path path = root.resolve(ConfigParser.FILE_NAME);
+        try {
             ProjectSpec project = ConfigParser.parse(content, root, env, name -> read(root.resolve(name)));
             return new Result.Loaded(path, content, project);
         } catch (ConfigException e) {
             return new Result.Invalid(path, e.format(path.getFileName().toString()), e.problems());
-        } catch (IOException e) {
-            return new Result.Missing("could not read " + path + ": " + e.getMessage());
         }
     }
 
@@ -68,6 +78,13 @@ public final class ProjectLoader {
                 lines.add(s.name() + " health check:  " + c.command());
             }
         });
+        // Tasks run only on a click, but they are commands from the same file: trusting the project covers them too.
+        project.tasks()
+                .values()
+                .forEach(t -> lines.add("task " + t.name() + ":  " + t.command()
+                        + (t.directory().equals(project.root())
+                                ? ""
+                                : "   (in " + project.root().relativize(t.directory()) + ")")));
         return lines;
     }
 

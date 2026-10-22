@@ -21,6 +21,16 @@ final class FakeIntrospection implements Introspection {
     final List<Connection> connections = new ArrayList<>();
 
     @Override
+    public List<Listener> allListeners() {
+        return List.copyOf(listeners.values());
+    }
+
+    @Override
+    public Optional<String> devdeskProjectOf(long pid) {
+        return Optional.empty();
+    }
+
+    @Override
     public List<Connection> connectionsOf(Set<Long> pids) {
         return connections.stream().filter(c -> pids.contains(c.pid())).toList();
     }

@@ -13,14 +13,14 @@ import tools.jackson.core.TokenStreamLocation;
 import tools.jackson.dataformat.yaml.YAMLFactory;
 
 /** Turns YAML text into a {@link YamlNode} tree using Jackson's token stream, keeping every position. */
-final class YamlReader {
+public final class YamlReader {
 
     private static final YAMLFactory FACTORY = YAMLFactory.builder().build();
 
     private YamlReader() {}
 
     /** Parses the whole document. Syntax errors and duplicate keys become problems with a position. */
-    static YamlNode read(String yaml) throws ConfigException {
+    public static YamlNode read(String yaml) throws ConfigException {
         try (JsonParser parser = FACTORY.createParser(ObjectReadContext.empty(), yaml)) {
             JsonToken first = parser.nextToken();
             if (first == null) {
