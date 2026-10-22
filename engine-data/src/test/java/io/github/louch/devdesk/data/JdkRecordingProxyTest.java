@@ -67,6 +67,10 @@ class JdkRecordingProxyTest {
                     HttpResponse.BodyHandlers.ofString());
             assertThat(missing.statusCode()).isEqualTo(404);
 
+            // The proxy writes the record right after relaying the answer, so the client can be a moment ahead.
+            for (int i = 0; i < 100 && recorded.size() < 2; i++) {
+                Thread.sleep(20);
+            }
             assertThat(recorded).hasSize(2);
             Exchange e = recorded.getFirst();
             assertThat(e.caller()).isEqualTo("web");

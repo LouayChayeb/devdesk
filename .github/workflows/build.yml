@@ -36,7 +36,7 @@ jobs:
           XDG_RUNTIME_DIR=/run/user/$uid systemd-run --user --scope --quiet true && echo "systemd user session works"
 
       # 5. The same command you run locally: compile, test, format check, style check.
-      - run: ./gradlew build
+      - run: ./gradlew build --continue
 
       # 6. A skipped test proves nothing: fail if any was skipped.
       - run: sh scripts/no-skipped-tests.sh
