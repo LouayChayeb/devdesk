@@ -42,7 +42,8 @@ public final class ProjectLoader {
                     + ". Run DevDesk in a project folder, or point to the file with -f path/to/devdesk.yaml");
         }
         try {
-            return loadText(path.getParent(), Files.readString(path), env);
+            // The real file, not "<folder>/devdesk.yaml": with -f other.yaml, trust and messages must name other.yaml.
+            return loadAt(path, Files.readString(path), env);
         } catch (IOException e) {
             return new Result.Missing("could not read " + path + ": " + e.getMessage());
         }
@@ -53,8 +54,12 @@ public final class ProjectLoader {
      * anything is written. Env files and relative paths resolve against the folder like for a saved file.
      */
     public static Result loadText(Path folder, String content, Map<String, String> env) {
-        Path root = folder.toAbsolutePath().normalize();
-        Path path = root.resolve(ConfigParser.FILE_NAME);
+        return loadAt(folder.toAbsolutePath().normalize().resolve(ConfigParser.FILE_NAME), content, env);
+    }
+
+    /** {@code content} as the file {@code path}: its folder is the project's root. */
+    private static Result loadAt(Path path, String content, Map<String, String> env) {
+        Path root = path.getParent();
         try {
             ProjectSpec project = ConfigParser.parse(content, root, env, name -> read(root.resolve(name)));
             return new Result.Loaded(path, content, project);
