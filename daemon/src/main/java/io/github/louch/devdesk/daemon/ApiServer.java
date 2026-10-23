@@ -608,62 +608,64 @@ final class ApiServer {
                     return Map.of("reply", session.redis().command(t, words));
                 }));
             });
-            // MongoDB: databases → collections → documents, as JSON text.
-            config.routes.get(
-                    "/api/v1/data/{service}/mongo/databases",
-                    ctx -> answer(
+            if (extras) { // extras: the MongoDB pages
+                // MongoDB: databases → collections → documents, as JSON text.
+                config.routes.get(
+                        "/api/v1/data/{service}/mongo/databases",
+                        ctx -> answer(
+                                ctx,
+                                mongo(
+                                        ctx,
+                                        t -> Map.of(
+                                                "databases",
+                                                session.documents().databases(t).stream()
+                                                        .map(d -> Map.of("name", d.name(), "sizeBytes", d.sizeBytes()))
+                                                        .toList()))));
+                config.routes.get("/api/v1/data/{service}/mongo/collections", ctx -> {
+                    String db = Objects.requireNonNullElse(ctx.queryParam("db"), "");
+                    answer(
                             ctx,
                             mongo(
                                     ctx,
                                     t -> Map.of(
-                                            "databases",
-                                            session.documents().databases(t).stream()
-                                                    .map(d -> Map.of("name", d.name(), "sizeBytes", d.sizeBytes()))
-                                                    .toList()))));
-            config.routes.get("/api/v1/data/{service}/mongo/collections", ctx -> {
-                String db = Objects.requireNonNullElse(ctx.queryParam("db"), "");
-                answer(
-                        ctx,
-                        mongo(
-                                ctx,
-                                t -> Map.of(
-                                        "collections",
-                                        session.documents().collections(t, db).stream()
-                                                .map(c -> Map.of("name", c.name(), "documents", c.documents()))
-                                                .toList())));
-            });
-            config.routes.post("/api/v1/data/{service}/mongo/{action}", ctx -> {
-                Map<?, ?> b = ctx.bodyAsClass(Map.class);
-                if (!(b.get("db") instanceof String db) || !(b.get("collection") instanceof String coll)) {
-                    ctx.status(400).json(ApiJson.error("send {\"db\", \"collection\", ...}"));
-                    return;
-                }
-                String filter = b.get("filter") instanceof String f ? f : "";
-                String sort = b.get("sort") instanceof String s ? s : "";
-                String document = b.get("document") instanceof String d ? d : "";
-                String id = b.get("id") instanceof String i ? i : "";
-                int skip = b.get("skip") instanceof Number n ? Math.max(0, n.intValue()) : 0;
-                int limit = b.get("limit") instanceof Number n ? Math.clamp(n.intValue(), 1, 500) : 50;
-                answer(ctx, mongo(ctx, t -> switch (ctx.pathParam("action")) {
-                    case "find" -> {
-                        var page = session.documents().find(t, db, coll, filter, sort, skip, limit);
-                        yield Map.of(
-                                "documents",
-                                page.documents(),
-                                "matching",
-                                page.matching(),
-                                "ms",
-                                page.took().toMillis());
+                                            "collections",
+                                            session.documents().collections(t, db).stream()
+                                                    .map(c -> Map.of("name", c.name(), "documents", c.documents()))
+                                                    .toList())));
+                });
+                config.routes.post("/api/v1/data/{service}/mongo/{action}", ctx -> {
+                    Map<?, ?> b = ctx.bodyAsClass(Map.class);
+                    if (!(b.get("db") instanceof String db) || !(b.get("collection") instanceof String coll)) {
+                        ctx.status(400).json(ApiJson.error("send {\"db\", \"collection\", ...}"));
+                        return;
                     }
-                    case "insert" -> Map.of("id", session.documents().insert(t, db, coll, document));
-                    case "replace" -> {
-                        session.documents().replace(t, db, coll, id, document);
-                        yield Map.of("replaced", true);
-                    }
-                    case "delete" -> Map.of("deleted", session.documents().delete(t, db, coll, id));
-                    default -> throw new DataException("unknown action: use find, insert, replace or delete");
-                }));
-            });
+                    String filter = b.get("filter") instanceof String f ? f : "";
+                    String sort = b.get("sort") instanceof String s ? s : "";
+                    String document = b.get("document") instanceof String d ? d : "";
+                    String id = b.get("id") instanceof String i ? i : "";
+                    int skip = b.get("skip") instanceof Number n ? Math.max(0, n.intValue()) : 0;
+                    int limit = b.get("limit") instanceof Number n ? Math.clamp(n.intValue(), 1, 500) : 50;
+                    answer(ctx, mongo(ctx, t -> switch (ctx.pathParam("action")) {
+                        case "find" -> {
+                            var page = session.documents().find(t, db, coll, filter, sort, skip, limit);
+                            yield Map.of(
+                                    "documents",
+                                    page.documents(),
+                                    "matching",
+                                    page.matching(),
+                                    "ms",
+                                    page.took().toMillis());
+                        }
+                        case "insert" -> Map.of("id", session.documents().insert(t, db, coll, document));
+                        case "replace" -> {
+                            session.documents().replace(t, db, coll, id, document);
+                            yield Map.of("replaced", true);
+                        }
+                        case "delete" -> Map.of("deleted", session.documents().delete(t, db, coll, id));
+                        default -> throw new DataException("unknown action: use find, insert, replace or delete");
+                    }));
+                });
+            }
             config.routes.get("/api/v1/data/{service}/stream", ctx -> {
                 String key = Objects.requireNonNullElse(ctx.queryParam("key"), "");
                 answer(ctx, redis(ctx, t -> ApiJson.stream(key, session.redis().stream(t, key))));
@@ -777,42 +779,45 @@ final class ApiServer {
                                 queues.publish(
                                         ctx.pathParam("service"), ctx.pathParam("queue"), ctx.bodyAsClass(Map.class))));
             }
-            config.routes.get("/api/v1/mail", ctx -> answer(ctx, mail.catchers()));
-            config.routes.get(
-                    "/api/v1/mail/{service}/messages",
-                    ctx -> answer(
-                            ctx,
-                            mail.list(
-                                    ctx.pathParam("service"),
-                                    ctx.queryParam("search"),
-                                    limit(ctx.queryParam("limit"), 50))));
-            config.routes.get(
-                    "/api/v1/mail/{service}/messages/{id}",
-                    ctx -> answer(ctx, mail.read(ctx.pathParam("service"), ctx.pathParam("id"))));
-            config.routes.post(
-                    "/api/v1/mail/{service}/delete",
-                    ctx -> answer(ctx, mail.delete(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
-            config.routes.get("/api/v1/mail/{service}/messages/{id}/parts/{part}", ctx -> {
-                try {
-                    var bytes = mail.attachment(ctx.pathParam("service"), ctx.pathParam("id"), ctx.pathParam("part"));
-                    if (bytes.isEmpty()) {
-                        ctx.status(404).json(ApiJson.error("no such mail catcher in the open project"));
-                    } else {
-                        ctx.contentType("application/octet-stream").result(bytes.get());
+            if (extras) { // extras: the mail catcher (Mailpit) inbox
+                config.routes.get("/api/v1/mail", ctx -> answer(ctx, mail.catchers()));
+                config.routes.get(
+                        "/api/v1/mail/{service}/messages",
+                        ctx -> answer(
+                                ctx,
+                                mail.list(
+                                        ctx.pathParam("service"),
+                                        ctx.queryParam("search"),
+                                        limit(ctx.queryParam("limit"), 50))));
+                config.routes.get(
+                        "/api/v1/mail/{service}/messages/{id}",
+                        ctx -> answer(ctx, mail.read(ctx.pathParam("service"), ctx.pathParam("id"))));
+                config.routes.post(
+                        "/api/v1/mail/{service}/delete",
+                        ctx -> answer(ctx, mail.delete(ctx.pathParam("service"), ctx.bodyAsClass(Map.class))));
+                config.routes.get("/api/v1/mail/{service}/messages/{id}/parts/{part}", ctx -> {
+                    try {
+                        var bytes =
+                                mail.attachment(ctx.pathParam("service"), ctx.pathParam("id"), ctx.pathParam("part"));
+                        if (bytes.isEmpty()) {
+                            ctx.status(404).json(ApiJson.error("no such mail catcher in the open project"));
+                        } else {
+                            ctx.contentType("application/octet-stream").result(bytes.get());
+                        }
+                    } catch (DataException e) {
+                        ctx.status(422).json(ApiJson.error(e.getMessage()));
                     }
-                } catch (DataException e) {
-                    ctx.status(422).json(ApiJson.error(e.getMessage()));
-                }
-            });
-            config.routes.post(
-                    "/api/v1/mail/{service}/messages/{id}/parts/{part}/save",
-                    ctx -> answer(
-                            ctx,
-                            mail.saveAttachment(
-                                    ctx.pathParam("service"),
-                                    ctx.pathParam("id"),
-                                    ctx.pathParam("part"),
-                                    ctx.bodyAsClass(Map.class))));
+                });
+                config.routes.post(
+                        "/api/v1/mail/{service}/messages/{id}/parts/{part}/save",
+                        ctx -> answer(
+                                ctx,
+                                mail.saveAttachment(
+                                        ctx.pathParam("service"),
+                                        ctx.pathParam("id"),
+                                        ctx.pathParam("part"),
+                                        ctx.bodyAsClass(Map.class))));
+            }
             config.routes.get("/api/v1/http", ctx -> answer(ctx, requests.overview()));
             config.routes.post("/api/v1/http/send", ctx -> answer(ctx, requests.send(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/http/run", ctx -> answer(ctx, requests.run(ctx.bodyAsClass(Map.class))));

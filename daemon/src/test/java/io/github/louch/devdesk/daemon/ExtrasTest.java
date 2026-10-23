@@ -12,7 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 /** The extras switch: off by default, on by setting or env var, and while off their routes don't exist at all. */
 class ExtrasTest {
 
-    /** One route of each extra: recorder, stress lab, remote machine, queues, mock server, S3, Elasticsearch. */
+    /** One route of each extra: recorder, stress lab, remote machine, queues, mock server, S3, Elasticsearch, Mongo, mail. */
     private static final List<String> EXTRA_ROUTES = List.of(
             "GET /recorder",
             "GET /stress",
@@ -20,11 +20,13 @@ class ExtrasTest {
             "GET /queues",
             "GET /http/mock",
             "GET /data/x/objects/buckets",
-            "GET /data/x/search/indices");
+            "GET /data/x/search/indices",
+            "GET /data/x/mongo/databases",
+            "GET /mail");
 
     /** Core routes that must be there either way (the API client stays: it isn't an extra). */
     private static final List<String> CORE_ROUTES =
-            List.of("GET /project", "GET /project/verdict", "GET /data", "GET /http", "GET /mail");
+            List.of("GET /project", "GET /project/verdict", "GET /data", "GET /http");
 
     @TempDir
     Path home;

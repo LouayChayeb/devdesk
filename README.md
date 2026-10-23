@@ -85,8 +85,8 @@ Other commands: `devdesk ps` (what runs, and leftovers), `devdesk history` (what
 cd ui && npm install && npm run app
 ```
 
-Extras (mock server, traffic recorder, stress lab, Kafka / SQS / S3 / Elasticsearch / RabbitMQ pages, running on
-another machine, auto-sleep) are off by default. Turn them on in the app's project menu, with `extras=on` in
+Extras (mock server, traffic recorder, stress lab, Kafka / SQS / S3 / Elasticsearch / RabbitMQ / MongoDB pages, the
+mail inbox, running on another machine, auto-sleep) are off by default. Turn them on in the app's project menu, with `extras=on` in
 `~/.config/devdesk/settings.properties`, or with `DEVDESK_EXTRAS=on`.
 
 ## Build

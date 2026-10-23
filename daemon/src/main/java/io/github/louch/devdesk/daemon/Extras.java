@@ -14,7 +14,8 @@ import java.util.Properties;
 
 /**
  * The extras switch. Extras are the tools beyond DevDesk's core (run, clean up, explain): mock server, traffic
- * recorder, stress lab, Kafka / SQS / S3 / Elasticsearch / RabbitMQ pages, running on another machine, and auto-sleep.
+ * recorder, stress lab, Kafka / SQS / S3 / Elasticsearch / RabbitMQ / MongoDB pages, the mail inbox (Mailpit),
+ * running on another machine, and auto-sleep.
  * They're off unless turned on; while off, their API routes aren't even registered and auto-sleep never runs.
  *
  * <p>Turned on by {@code DEVDESK_EXTRAS=on} (wins when set), or by {@code extras=on} in
