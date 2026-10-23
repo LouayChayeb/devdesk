@@ -237,8 +237,8 @@ final class UpCommand implements Callable<Integer> {
         }
         screen.println("! A previous DevDesk was killed or crashed and left " + reports.size()
                 + " thing(s) running for "
-                + project.project().name() + ". They're provably DevDesk's own (systemd scope / container label "
-                + "with this project's key), so they're stopped first:");
+                + project.project().name() + ". They're provably DevDesk's own (systemd scope, process-group record"
+                + " or container label with this project's key), so they're stopped first:");
         for (Survivors.Report r : reports) {
             Leftover l = r.leftover();
             String what = l.service() + ": " + l.description() + (l.pids().isEmpty() ? "" : " (PIDs " + l.pids() + ")")
