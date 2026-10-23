@@ -145,4 +145,33 @@ class DoctorTest {
         assertThat(Doctor.normalize("docker.io/library/postgres:18")).isEqualTo("postgres:18");
         assertThat(Doctor.normalize("localhost:5000/team/api")).isEqualTo("localhost:5000/team/api:latest");
     }
+
+    @Test
+    void anImageComposeBuildsIsAnErrorWithTheBuildCommandNotAPull() throws Exception {
+        // Found on real projects (node-express-boilerplate, full-stack-fastapi-template): the image is local-only.
+        var project = ConfigParser.parse("""
+                version: 1
+                services:
+                  app: { container: { image: node-app } }
+                  db: { container: { image: postgres:18 } }
+                """, Path.of("/p"), Map.of(), f -> Optional.empty());
+        var compose = "services:\n  node-app:\n    build: .\n    image: node-app\n  db:\n    image: postgres:18\n";
+
+        var report = Doctor.check(
+                project, facts(Map.of("/p/docker-compose.yml", compose), Map.of(), 50 * Doctor.GIB), List.of());
+
+        assertThat(report.problems())
+                .filteredOn(f -> f.service().equals("app"))
+                .singleElement()
+                .satisfies(f -> {
+                    assertThat(f.ruleId()).isEqualTo("image-built-by-compose");
+                    assertThat(f.severity()).isEqualTo(Finding.Severity.ERROR);
+                    assertThat(f.actions()).containsExactly("docker compose build node-app");
+                });
+        // An image a registry has is still just "not downloaded yet".
+        assertThat(report.problems())
+                .filteredOn(f -> f.service().equals("db"))
+                .singleElement()
+                .satisfies(f -> assertThat(f.ruleId()).isEqualTo("image-not-pulled"));
+    }
 }

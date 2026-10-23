@@ -1,5 +1,8 @@
 package io.github.louch.devdesk.core.doctor;
 
+import io.github.louch.devdesk.core.config.ConfigException;
+import io.github.louch.devdesk.core.config.YamlNode;
+import io.github.louch.devdesk.core.config.YamlReader;
 import io.github.louch.devdesk.core.diagnosis.Finding;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
@@ -200,9 +203,26 @@ public final class Doctor {
             return;
         }
         int missing = 0;
+        Map<String, String> built = composeBuilds(project, facts);
         for (ServiceSpec s : containers) {
             String image = ((Workload.Container) s.workload()).image();
-            if (!facts.localImages().get().contains(normalize(image))) {
+            if (!facts.localImages().get().contains(normalize(image)) && built.containsKey(normalize(image))) {
+                // Found on real projects: compose builds this image itself, so no registry has it.
+                missing++;
+                String composeService = built.get(normalize(image));
+                problems.add(new Finding(
+                        "image-built-by-compose",
+                        Finding.Severity.ERROR,
+                        s.name(),
+                        image + " is built by docker compose, and isn't built yet",
+                        "docker compose builds this image from a Dockerfile (service \"" + composeService + "\"),"
+                                + " so it can't be downloaded: starting " + s.name() + " would fail with \"pull"
+                                + " access denied\". Build it once, then DevDesk uses it.",
+                        List.of(
+                                "docker image ls: no " + normalize(image),
+                                "docker compose: " + composeService + " has build: and image: " + image),
+                        List.of("docker compose build " + composeService)));
+            } else if (!facts.localImages().get().contains(normalize(image))) {
                 missing++;
                 problems.add(new Finding(
                         "image-not-pulled",
@@ -286,6 +306,38 @@ public final class Doctor {
         } else {
             passed.add(free + " of disk space free");
         }
+    }
+
+    private static final List<String> COMPOSE_FILES =
+            List.of("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml");
+
+    /** Images the project's compose file builds itself (build: next to image:), normalized → compose service. */
+    static Map<String, String> composeBuilds(ProjectSpec project, Facts facts) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (String name : COMPOSE_FILES) {
+            Optional<String> text = facts.read().apply(project.root().resolve(name));
+            if (text.isEmpty()) {
+                continue;
+            }
+            try {
+                if (YamlReader.read(text.get()) instanceof YamlNode.Mapping top
+                        && top.entries().get("services") != null
+                        && top.entries().get("services").value() instanceof YamlNode.Mapping services) {
+                    services.entries().forEach((service, entry) -> {
+                        if (entry.value() instanceof YamlNode.Mapping m
+                                && m.entries().containsKey("build")
+                                && m.entries().get("image") != null
+                                && m.entries().get("image").value() instanceof YamlNode.Scalar image) {
+                            out.put(normalize(image.text()), service);
+                        }
+                    });
+                }
+            } catch (ConfigException e) {
+                // an unreadable compose file: the setup wizard says so; the doctor just can't use it
+            }
+            break; // compose uses the first file it finds
+        }
+        return out;
     }
 
     /** "postgres" → "postgres:latest"; "docker.io/library/postgres:18" → "postgres:18" (how docker image ls names them). */
