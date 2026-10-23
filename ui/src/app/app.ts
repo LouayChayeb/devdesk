@@ -45,7 +45,10 @@ export class App {
   readonly wb = inject(Workbench);
   private readonly requests = inject(Requests);
   readonly catalog = inject(Catalog);
-  readonly nav = NAV;
+  /** The Inbox (mail catcher, queues) is an extra: shown only when the engine has extras on. */
+  readonly nav = computed(() =>
+    NAV.map((g) => ({ ...g, pages: g.pages.filter((p) => p.id !== 'mail' || this.engine.extras()) })).filter((g) => g.pages.length),
+  );
   readonly page = signal<Page>(this.validPage(this.loadUi().page));
   readonly logsHeight = signal<number>(this.loadUi().logs ?? 240);
   /** Ctrl+J: the log panel at the bottom of every page, shown or hidden. */

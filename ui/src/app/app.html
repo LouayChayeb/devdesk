@@ -70,7 +70,7 @@
 
     @if (engine.project()) {
       <nav class="nav">
-        @for (g of nav; track g.group) {
+        @for (g of nav(); track g.group) {
           <div class="group">{{ g.group }}</div>
           @for (it of g.pages; track it.id) {
             <button class="nav-item" [class.on]="page() === it.id" (click)="setPage(it.id)" [title]="it.label + ' (' + keyOf(it.id) + ')'">
@@ -160,7 +160,7 @@
             @case ('timeline') { <dd-timeline /> }
             @case ('connections') { <dd-connections /> }
             @case ('data') { <dd-data class="fill" (show)="showDoc($event)" (toast)="toast($event)" /> }
-            @case ('mail') { <dd-mail class="fill" (show)="showDoc($event)" (toast)="toast($event)" /> }
+            @case ('mail') { @if (engine.extras()) { <dd-mail class="fill" (show)="showDoc($event)" (toast)="toast($event)" /> } }
             @case ('api') { <dd-api class="fill" (show)="showDoc($event)" (toast)="toast($event)" (logs)="selected.set($event); logsOpen.set(true)" /> }
           }
         </section>
