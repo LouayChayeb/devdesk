@@ -48,9 +48,10 @@ settings stay LIKELY or UNKNOWN, because DevDesk can't replay them safely.
   port. A container with the name DevDesk wants but not its labels is left alone, and DevDesk says so.
 - **With a systemd user session (most Linux desktops, WSL2 with `systemd=true`): zero leftovers.** Every service runs
   in its own scope, so stopping it stops every child and grandchild, even ones that changed their process group.
-- **Without systemd (process-group mode): leftovers are detected and reported.** A service that escapes its process
-  group can outlive a stop. If DevDesk itself is killed (`kill -9`, crash), the next start finds what it left, says so,
-  and stops it.
+- **Without systemd (process-group mode): leftovers are detected and reported.** Every process of a service carries a
+  random marker in its environment, so even a child that left its process group is found and stopped; one that wipes
+  its own environment could still outlive a stop. If DevDesk itself is killed (`kill -9`, crash, at any moment: 15
+  crash points are tested), the next start finds what it left, says so, and stops it.
 - **Secrets stay put.** Env values are never logged or shown by default, and change tracking compares fingerprints
   only.
 - **Nothing runs without your OK.** A project must be trusted (`devdesk trust`) before its commands run, and again

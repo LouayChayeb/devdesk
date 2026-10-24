@@ -3,6 +3,7 @@ package io.github.louch.devdesk.daemon;
 import io.github.louch.devdesk.core.branch.BranchStacks;
 import io.github.louch.devdesk.core.container.ContainerRuntime;
 import io.github.louch.devdesk.core.container.NoContainers;
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.data.DataException;
 import io.github.louch.devdesk.core.data.DatabaseBackups;
 import io.github.louch.devdesk.core.data.DatabaseTarget;
@@ -860,11 +861,13 @@ final class EngineSession implements AutoCloseable {
                 }
                 case ProjectLock.Result.Acquired acquired -> {
                     lock = Optional.of(acquired.lock());
+                    CrashPoint.reach("up.locked");
                     // A new session: record it, and clean up what a killed DevDesk left (we hold the lock now).
                     findings.clear();
                     rawFindings.clear();
                     recorder.ifPresent(r -> r.sessionStarted("desktop app"));
                     cleanUpSurvivors(l);
+                    CrashPoint.reach("up.cleaned");
                 }
             }
         }
@@ -1203,7 +1206,9 @@ final class EngineSession implements AutoCloseable {
         }
         current.ifPresent(s -> {
             try {
+                CrashPoint.reach("stop.begin");
                 s.down().get(2, TimeUnit.MINUTES);
+                CrashPoint.reach("stop.done");
                 recorder.ifPresent(r -> r.sessionEnded("desktop app closed"));
                 lock.ifPresent(ProjectLock::close);
             } catch (Exception e) {
@@ -1238,6 +1243,12 @@ final class EngineSession implements AutoCloseable {
         List<LeftoverFinder> finders = new ArrayList<>(List.of(engine.leftovers()));
         if (containers(l).orElse(null) instanceof DockerContainerRuntime docker) {
             finders.add(docker.leftovers());
+            // "Prove it" replicas whose DevDesk was killed mid-proof (their owner label names a dead process).
+            List<String> replicas = docker.imageReplay(engine.random()).removeAbandoned();
+            if (!replicas.isEmpty()) {
+                onEvent(new ProjectEvent.Warning(
+                        "", "removed what a DevDesk killed during Prove it left: " + String.join(", ", replicas)));
+            }
         }
         for (Survivors.Report r : new Survivors(finders).cleanUp(l.project())) {
             String message = "left behind by a DevDesk that was killed: "

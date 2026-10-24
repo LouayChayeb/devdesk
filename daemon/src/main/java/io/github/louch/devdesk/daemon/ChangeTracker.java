@@ -5,6 +5,7 @@ import io.github.louch.devdesk.core.changes.ImageProof;
 import io.github.louch.devdesk.core.changes.KnownGood;
 import io.github.louch.devdesk.core.changes.Suspect;
 import io.github.louch.devdesk.core.changes.Symptom;
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.health.HealthProbe;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
@@ -99,6 +100,7 @@ final class ChangeTracker {
         }
         if (!savedThisRun) {
             ProjectSpec p = current.get().project();
+            CrashPoint.reach("up.all-up");
             files.save(p, files.take(p, this::imageIds));
             savedThisRun = true;
         }

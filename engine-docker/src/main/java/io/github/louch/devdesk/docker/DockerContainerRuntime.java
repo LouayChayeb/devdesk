@@ -19,6 +19,7 @@ import com.github.dockerjava.api.model.StreamType;
 import io.github.louch.devdesk.core.container.ContainerLaunchSpec;
 import io.github.louch.devdesk.core.container.ContainerRuntime;
 import io.github.louch.devdesk.core.container.RunningContainer;
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.health.ProbeResult;
 import io.github.louch.devdesk.core.leftovers.Leftover;
 import io.github.louch.devdesk.core.leftovers.LeftoverFinder;
@@ -119,12 +120,14 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         } catch (DockerException e) {
             throw new LaunchException("Docker could not create " + name + ": " + clean(e), e);
         }
+        CrashPoint.reach("container.created");
         try {
             docker.startContainerCmd(id).exec();
         } catch (DockerException e) {
             removeAfterFailedStart(id); // don't leave a created-but-never-started container behind
             throw new LaunchException("Docker could not start " + name + ": " + clean(e) + hint(clean(e)), e);
         }
+        CrashPoint.reach("container.started");
         try {
             followLogs(id, output);
             CompletableFuture<ExitStatus> exit = new CompletableFuture<>();
@@ -174,6 +177,7 @@ public final class DockerContainerRuntime implements ContainerRuntime {
             return new StopResult.Stopped(onExit(container).getNow(ExitStatus.of(0)), false);
         }
         ExitStatus exit = onExit(container).join();
+        CrashPoint.reach("container.stop-sent");
         removeQuietly(container.id());
         if (exists(container.id())) {
             return new StopResult.LeftBehind(Optional.of(exit), Set.of(container.pid()));
@@ -216,6 +220,7 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                 @Override
                 public void onNext(PullResponseItem item) {
                     super.onNext(item);
+                    CrashPoint.reach("container.pulling");
                     // One line per finished layer, not per progress tick: enough to see it's moving.
                     if ("Pull complete".equals(item.getStatus())) {
                         output.accept(new OutputLine(StreamKind.STDERR, "[devdesk] layer " + item.getId() + " done"));

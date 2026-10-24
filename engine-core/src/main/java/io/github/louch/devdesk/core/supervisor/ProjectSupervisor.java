@@ -3,6 +3,7 @@ package io.github.louch.devdesk.core.supervisor;
 import io.github.louch.devdesk.core.container.ContainerLaunchSpec;
 import io.github.louch.devdesk.core.container.ContainerRuntime;
 import io.github.louch.devdesk.core.container.RunningContainer;
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.diagnosis.DiagnosisContext;
 import io.github.louch.devdesk.core.diagnosis.DiagnosisEngine;
 import io.github.louch.devdesk.core.diagnosis.Finding;
@@ -571,6 +572,7 @@ public final class ProjectSupervisor implements AutoCloseable {
             listener.accept(new ProjectEvent.Output(s.spec.name(), line));
         };
         s.launching = Thread.ofVirtual().name("launch-" + s.spec.name()).unstarted(() -> {
+            CrashPoint.reach("launch.before");
             Optional<String> busy = busyPort(s.spec);
             if (busy.isPresent()) {
                 onActor(() -> apply(s, new ServiceEvent.LaunchFailed(busy.get()), busy.get()));
@@ -696,6 +698,7 @@ public final class ProjectSupervisor implements AutoCloseable {
 
     private void stopInBackground(Service s, Handle handle) {
         Thread.ofVirtual().name("stop-" + s.spec.name()).start(() -> {
+            CrashPoint.reach("stop.service");
             StopResult result;
             try {
                 result = switch (handle) {
@@ -747,6 +750,7 @@ public final class ProjectSupervisor implements AutoCloseable {
         Handle current = s.handle.orElseThrow();
         s.probeTask = actor.schedule(
                 () -> Thread.ofVirtual().name("probe-" + s.spec.name()).start(() -> {
+                    CrashPoint.reach("health.probing");
                     ProbeResult result =
                             s.spec.health() instanceof HealthCheckSpec.Docker && current instanceof Handle.Container c
                                     ? containers.health(c.container())

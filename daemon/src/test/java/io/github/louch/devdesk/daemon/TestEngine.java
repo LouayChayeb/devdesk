@@ -21,13 +21,16 @@ record TestEngine(Process process, int port, String base, String token, HttpClie
 
     /** @param noSystemd hide the user's systemd from the engine: it then owns services by process group */
     static TestEngine start(Path home, String extras, boolean noSystemd) throws Exception {
-        var builder = new ProcessBuilder(
-                        "java",
-                        "--enable-native-access=ALL-UNNAMED",
-                        "-cp",
-                        System.getProperty("java.class.path"),
-                        Main.class.getName())
-                .redirectError(ProcessBuilder.Redirect.DISCARD);
+        return start(home, extras, noSystemd, java.util.List.of());
+    }
+
+    /** @param jvmOptions extra JVM options, e.g. the crash-point properties */
+    static TestEngine start(Path home, String extras, boolean noSystemd, java.util.List<String> jvmOptions)
+            throws Exception {
+        var command = new java.util.ArrayList<>(java.util.List.of("java", "--enable-native-access=ALL-UNNAMED"));
+        command.addAll(jvmOptions);
+        command.addAll(java.util.List.of("-cp", System.getProperty("java.class.path"), Main.class.getName()));
+        var builder = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD);
         builder.environment().put("HOME", home.toString());
         builder.environment().put("XDG_STATE_HOME", home.resolve("state").toString());
         builder.environment().remove("XDG_CONFIG_HOME");

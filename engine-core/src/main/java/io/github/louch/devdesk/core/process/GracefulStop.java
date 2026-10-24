@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.core.process;
 
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
@@ -24,6 +25,7 @@ public final class GracefulStop {
     public StopResult stop(RunningProcess process, Duration gracePeriod) throws InterruptedException {
         // SIGTERM first so apps can close DB connections and flush files; SIGKILL only after the grace period.
         runtime.signal(process, Signal.TERM);
+        CrashPoint.reach("stop.sigterm-sent");
         if (awaitAllGone(process, gracePeriod)) {
             return new StopResult.Stopped(exitStatus(process).orElseThrow(), false);
         }

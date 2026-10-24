@@ -2,6 +2,7 @@ package io.github.louch.devdesk.cli;
 
 import io.github.louch.devdesk.core.container.ContainerRuntime;
 import io.github.louch.devdesk.core.container.NoContainers;
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.diagnosis.DiagnosisEngine;
 import io.github.louch.devdesk.core.diagnosis.Introspection;
 import io.github.louch.devdesk.core.graph.DependencyCycleException;
@@ -126,6 +127,7 @@ final class UpCommand implements Callable<Integer> {
             }
             case ProjectLock.Result.Acquired acquired -> lock = acquired.lock();
         }
+        CrashPoint.reach("up.locked");
         // From here on everything goes through the terminal writer: the engine must never wait for the terminal.
         terminal = new TerminalWriter(out);
         screen = terminal.stream();
@@ -134,6 +136,7 @@ final class UpCommand implements Callable<Integer> {
         var recorder = new Recorder(JsonlHistoryStore.forProject(env, project.project()), engine.clock());
         recorder.sessionStarted("devdesk up");
         cleanUpSurvivors(project, containers.get(), recorder);
+        CrashPoint.reach("up.cleaned");
         var supervisor = new ProjectSupervisor(
                 project.project(),
                 graph(project),
@@ -153,6 +156,7 @@ final class UpCommand implements Callable<Integer> {
         Thread onCtrlC = new Thread(() -> {
             stopAll(supervisor, project, containers.get(), recorder);
             recorder.sessionEnded("Ctrl+C or terminal closed");
+            CrashPoint.reach("stop.done");
             lock.close();
         });
         Runtime.getRuntime().addShutdownHook(onCtrlC);
@@ -164,6 +168,7 @@ final class UpCommand implements Callable<Integer> {
         printer.summary(states);
         if (states.values().stream().allMatch(UpCommand::up)) {
             // A clean start: what `devdesk why` compares with the next time something breaks.
+            CrashPoint.reach("up.all-up");
             engine.knownGood().save(project.project(), engine.knownGood().take(project.project(), this::imageIds));
         } else if (engine.knownGood().load(project.project()).isPresent()) {
             // Only when there's a clean start to compare with; otherwise the hint would lead nowhere.
@@ -196,6 +201,7 @@ final class UpCommand implements Callable<Integer> {
     private void stopAll(
             ProjectSupervisor supervisor, ProjectFile project, ContainerRuntime containers, Recorder recorder) {
         screen.println("Stopping everything (dependents first)...");
+        CrashPoint.reach("stop.begin");
         try {
             supervisor.down().get(2, TimeUnit.MINUTES);
         } catch (TimeoutException e) {
@@ -231,6 +237,14 @@ final class UpCommand implements Callable<Integer> {
      * stopped before starting again, otherwise it would hold the same ports and confuse everything.
      */
     private void cleanUpSurvivors(ProjectFile project, ContainerRuntime containers, Recorder recorder) {
+        if (containers instanceof DockerContainerRuntime docker) {
+            // "Prove it" replicas whose DevDesk was killed mid-proof (their owner label names a dead process).
+            List<String> replicas = docker.imageReplay(engine.random()).removeAbandoned();
+            if (!replicas.isEmpty()) {
+                screen.println(
+                        "! Removed what a DevDesk killed during \"Prove it\" left: " + String.join(", ", replicas));
+            }
+        }
         List<Survivors.Report> reports = survivors(project, containers).cleanUp(project.project());
         if (reports.isEmpty()) {
             return;
