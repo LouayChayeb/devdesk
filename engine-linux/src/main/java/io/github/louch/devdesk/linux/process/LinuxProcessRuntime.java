@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.linux.process;
 
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.process.ExitStatus;
 import io.github.louch.devdesk.core.process.LaunchException;
 import io.github.louch.devdesk.core.process.OutputLine;
@@ -56,8 +57,11 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         /**
          * Mode B: a process group. Members must have started at or after {@code notBefore} (clock ticks since boot),
          * so a recycled PID belonging to an older, unrelated process is never counted as ours.
+         *
+         * @param marker the random DEVDESK_GROUP value every process of the family inherits (empty without records):
+         *     it also finds a member that left the process group with setsid
          */
-        record Group(long processGroup, long notBefore) implements Ownership {}
+        record Group(long processGroup, long notBefore, String marker) implements Ownership {}
 
         /** The command finished before we saw its scope, and systemd already removed it: nothing is left to own. */
         record Nothing() implements Ownership {}
@@ -120,14 +124,18 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         }
 
         long notBefore = ticksSinceBoot();
+        // Recorded BEFORE the fork: a DevDesk killed at any moment after it leaves a record, so nothing goes unseen.
+        records.ifPresent(r -> r.remember(spec.owner(), spec.name(), notBefore, marker, spec.command()));
         Process process;
         try {
             process = builder.start();
         } catch (IOException e) {
+            records.ifPresent(r -> r.forget(spec.owner(), marker));
             throw new LaunchException(
                     "Could not start '" + spec.name() + "' in " + spec.workingDirectory() + ": " + e.getMessage(), e);
         }
         closeQuietly(process);
+        CrashPoint.reach("process.forked");
         // Drain both pipes from the first moment; virtual threads are cheap enough for two per process.
         CompletableFuture<Void> stdoutDone =
                 drain(spec.name(), new LineReader(process.getInputStream(), StreamKind.STDOUT, output));
@@ -135,11 +143,8 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
                 drain(spec.name(), new LineReader(process.getErrorStream(), StreamKind.STDERR, output));
         CompletableFuture<Void> outputDone = CompletableFuture.allOf(stdoutDone, stderrDone);
 
-        Ownership ownership = awaitOwnership(spec, process, unit, notBefore);
-        if (ownership instanceof Ownership.Group g) {
-            records.ifPresent(r ->
-                    r.remember(spec.owner(), spec.name(), g.processGroup(), g.notBefore(), marker, spec.command()));
-        }
+        Ownership ownership = awaitOwnership(spec, process, unit, notBefore, marker);
+        CrashPoint.reach("process.owned");
         RunningProcess running = new RunningProcess(spec.name(), process.pid(), clock.instant());
         // Report the exit only after the last output lines arrived, so "exited" never prints before them.
         // Bounded: a leftover child can hold the pipe open forever, and then we report the exit anyway.
@@ -167,10 +172,18 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
                 cgroupMembers(scope.cgroupDir()).forEach(pid -> send(pid, signal));
             }
             case Ownership.Group group -> {
-                if (!groupMembers(group).isEmpty()) {
-                    // Negative PID = every process in that group (kill(2)).
-                    send(-group.processGroup(), signal);
+                Set<Long> members = groupMembers(group);
+                if (members.isEmpty()) {
+                    return;
                 }
+                // Negative PID = every process in that group (kill(2)).
+                send(-group.processGroup(), signal);
+                // A member that left the group with setsid still carries the marker: signalled one by one.
+                members.stream()
+                        .filter(pid -> ProcStat.read(pid)
+                                .map(st -> st.processGroup() != group.processGroup())
+                                .orElse(false))
+                        .forEach(pid -> send(pid, signal));
             }
             case Ownership.Nothing nothing -> {
                 // Nothing left alive to signal.
@@ -202,7 +215,7 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
     private Set<Long> forgetIfEmpty(String owner, Ownership.Group group) {
         Set<Long> members = groupMembers(group);
         if (members.isEmpty()) {
-            records.ifPresent(r -> r.forget(owner, group.processGroup()));
+            records.ifPresent(r -> r.forget(owner, group.marker()));
         }
         return members;
     }
@@ -220,7 +233,8 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
      * Waits until setsid has run (process group ID == PID) and, in scope mode, until the process is inside its scope.
      * Signalling earlier could miss part of the family.
      */
-    private Ownership awaitOwnership(ProcessLaunchSpec spec, Process process, String unit, long notBefore)
+    private Ownership awaitOwnership(
+            ProcessLaunchSpec spec, Process process, String unit, long notBefore, String marker)
             throws LaunchException {
         long pid = process.pid();
         Optional<Path> scopeDir = Optional.empty();
@@ -236,7 +250,7 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
             // (`sleep 1000 & exit`). So ownership must never depend on the top process still being alive.
             if (ready || !process.isAlive()) {
                 if (unit == null) {
-                    return new Ownership.Group(pid, notBefore);
+                    return new Ownership.Group(pid, notBefore, marker);
                 }
                 return scopeDir.or(() -> askSystemdForScope(unit))
                         .<Ownership>map(Ownership.Scope::new)
@@ -335,14 +349,17 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
      */
     private static Set<Long> groupMembers(Ownership.Group group) {
         try (Stream<Path> entries = Files.list(Path.of("/proc"))) {
-            return entries.map(p -> p.getFileName().toString())
+            Set<Long> members = entries.map(p -> p.getFileName().toString())
                     .filter(name -> name.chars().allMatch(Character::isDigit))
                     .flatMap(name -> ProcStat.read(Long.parseLong(name)).stream())
                     // Zombies are already dead (cgroup.procs leaves them out too); counting them would wait forever.
                     .filter(s -> !s.isZombie())
                     .filter(s -> s.processGroup() == group.processGroup() && s.startTime() >= group.notBefore())
                     .map(ProcStat::pid)
-                    .collect(Collectors.toUnmodifiableSet());
+                    .collect(Collectors.toCollection(java.util.HashSet::new));
+            // Plus any process carrying the family's marker that left the group (setsid): still ours.
+            members.addAll(GroupLeftovers.carriers(group.marker(), group.notBefore()));
+            return Set.copyOf(members);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

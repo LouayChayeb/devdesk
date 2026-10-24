@@ -21,15 +21,16 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Leftovers in process-group mode (no systemd). A process group can't be found again after a hard kill unless someone
- * wrote it down, so the runtime writes one small file per group it starts ({@code <state>/groups/<project key>/}) and
- * deletes it once the group is empty. On the next start, a file still there names a group a dead DevDesk left behind.
+ * Leftovers in process-group mode (no systemd). A process family can't be found again after a hard kill unless
+ * someone wrote it down, so the runtime writes one small record per service it starts
+ * ({@code <state>/groups/<project key>/<marker>.group}) <em>before</em> starting it, and deletes it once the family is
+ * gone. On the next start, a record still there names a family a dead DevDesk left behind.
  *
- * <p>Ownership proof (CLAUDE.md principle 2): a process counts only if it is in the recorded process group, started
- * after DevDesk created that group, on the same boot (boot id), AND carries the group's random marker in its
- * environment ({@value #MARKER}, inherited by every child). Group and start time alone aren't enough: once a group
- * dies out, the kernel may give its number to an unrelated program, whose processes start "after" too. A process
- * whose environment can't be read (another user's) never counts.
+ * <p>Ownership proof (CLAUDE.md principle 2): every process of the family carries the record's random marker in its
+ * environment ({@value #MARKER}, inherited by every child, also one that left the process group with setsid). A
+ * process counts only if it carries that exact marker, started after the record's {@code notBefore}, on the same boot
+ * (boot id). Group numbers and start times alone aren't enough: once a group dies out, the kernel may give its number
+ * to an unrelated program. A process whose environment can't be read (another user's) never counts.
  */
 public final class GroupLeftovers implements LeftoverFinder {
 
@@ -51,38 +52,40 @@ public final class GroupLeftovers implements LeftoverFinder {
         return base.resolve("devdesk").resolve("groups");
     }
 
-    /** Written right after setsid made the group, before anything could leak from it. */
-    void remember(String owner, String service, long group, long notBefore, String marker, String command) {
+    /**
+     * Written <em>before</em> the process is started: a DevDesk killed at any moment after the fork leaves a record,
+     * so nothing it started can go unnoticed.
+     */
+    void remember(String owner, String service, long notBefore, String marker, String command) {
         if (owner.isBlank() || marker.isBlank()) {
             return; // not a project's service (devdesk run, a health check): nothing to recover later
         }
         Properties p = new Properties();
         p.setProperty("service", service);
-        p.setProperty("group", Long.toString(group));
         p.setProperty("notBefore", Long.toString(notBefore));
         p.setProperty("boot", bootId());
         p.setProperty("marker", marker);
         p.setProperty("command", command);
         try {
             Path dir = Files.createDirectories(folder.resolve(owner));
-            Path tmp = dir.resolve(group + ".tmp");
+            Path tmp = dir.resolve(marker + ".tmp");
             try (Writer w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
-                p.store(w, "a process group DevDesk started; deleted when it's empty");
+                p.store(w, "a process family DevDesk started; deleted when it's gone");
             }
             // rename(2) is atomic: a kill mid-write never leaves half a record.
-            Files.move(tmp, dir.resolve(group + ".group"), StandardCopyOption.ATOMIC_MOVE);
+            Files.move(tmp, dir.resolve(marker + ".group"), StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
             // Not fatal: without the record, only a hard kill of DevDesk would go unnoticed.
         }
     }
 
-    /** The group is empty: nothing to find later. */
-    void forget(String owner, long group) {
-        if (owner.isBlank()) {
+    /** The family is gone: nothing to find later. */
+    void forget(String owner, String marker) {
+        if (owner.isBlank() || marker.isBlank()) {
             return;
         }
         try {
-            Files.deleteIfExists(folder.resolve(owner).resolve(group + ".group"));
+            Files.deleteIfExists(folder.resolve(owner).resolve(marker + ".group"));
         } catch (IOException e) {
             // found again next time, proven empty, and deleted then
         }
@@ -94,7 +97,7 @@ public final class GroupLeftovers implements LeftoverFinder {
         for (Record r : records(project.key())) {
             Set<Long> pids = members(r);
             if (pids.isEmpty()) {
-                forget(project.key(), r.group());
+                forget(project.key(), r.marker());
                 continue;
             }
             found.add(new Leftover(
@@ -121,12 +124,12 @@ public final class GroupLeftovers implements LeftoverFinder {
         }
         Record r = record.get();
         // SIGTERM first so the program can shut down cleanly. Each signal goes to a PID proven ours a moment ago,
-        // never to the group id: by now that id could in theory name someone else's group.
+        // never to a group id: by now that id could in theory name someone else's group.
         members(r).forEach(pid -> LibC.kill(pid, 15));
         long deadline = System.currentTimeMillis() + GRACE_MILLIS;
         while (System.currentTimeMillis() < deadline) {
             if (members(r).isEmpty()) {
-                forget(r.owner(), r.group());
+                forget(r.owner(), r.marker());
                 return "stopped";
             }
             sleep(100);
@@ -135,28 +138,34 @@ public final class GroupLeftovers implements LeftoverFinder {
         sleep(500);
         Set<Long> still = members(r);
         if (still.isEmpty()) {
-            forget(r.owner(), r.group());
+            forget(r.owner(), r.marker());
             return "force-killed: it ignored SIGTERM for 10 s";
         }
         return "still running: " + still;
     }
 
-    private record Record(
-            String owner, String service, long group, long notBefore, String boot, String marker, String command) {}
+    private record Record(String owner, String service, long notBefore, String boot, String marker, String command) {}
 
-    /** The live processes that provably belong to this record's group. */
+    /** The live processes that provably belong to this record's family. */
     private static Set<Long> members(Record r) {
         if (!r.boot().equals(bootId())) {
             return Set.of(); // the machine rebooted: every process from then is gone
+        }
+        return carriers(r.marker(), r.notBefore());
+    }
+
+    /** Live processes started at or after {@code notBefore} (ticks since boot) whose environment holds the marker. */
+    static Set<Long> carriers(String marker, long notBefore) {
+        if (marker.isBlank()) {
+            return Set.of();
         }
         try (Stream<Path> entries = Files.list(Path.of("/proc"))) {
             return entries.map(p -> p.getFileName().toString())
                     .filter(name -> name.chars().allMatch(Character::isDigit))
                     .flatMap(name -> ProcStat.read(Long.parseLong(name)).stream())
-                    .filter(s -> !s.isZombie())
-                    .filter(s -> s.processGroup() == r.group() && s.startTime() >= r.notBefore())
+                    .filter(s -> !s.isZombie() && s.startTime() >= notBefore)
                     .map(ProcStat::pid)
-                    .filter(pid -> carries(pid, r.marker()))
+                    .filter(pid -> carries(pid, marker))
                     .collect(Collectors.toUnmodifiableSet());
         } catch (IOException e) {
             return Set.of();
@@ -177,7 +186,6 @@ public final class GroupLeftovers implements LeftoverFinder {
                     out.add(new Record(
                             owner,
                             p.getProperty("service", "?"),
-                            Long.parseLong(p.getProperty("group")),
                             Long.parseLong(p.getProperty("notBefore")),
                             p.getProperty("boot", ""),
                             p.getProperty("marker", ""),
@@ -192,9 +200,9 @@ public final class GroupLeftovers implements LeftoverFinder {
         return out;
     }
 
-    /** "<project key>/<group>": the record it came from, so remove() finds it again. */
+    /** "<project key>/<marker>": the record it came from, so remove() finds it again. */
     private static String id(Record r) {
-        return r.owner() + "/" + r.group();
+        return r.owner() + "/" + r.marker();
     }
 
     /** Does the process's environment hold {@code DEVDESK_GROUP=<marker>}? /proc/<pid>/environ is NUL-separated. */
