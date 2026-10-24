@@ -10,6 +10,7 @@ import com.github.dockerjava.api.model.Frame;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Ports;
 import io.github.louch.devdesk.core.changes.ImageReplay;
+import io.github.louch.devdesk.core.crashpoint.CrashPoint;
 import io.github.louch.devdesk.core.health.ProbeResult;
 import io.github.louch.devdesk.core.process.LaunchException;
 import io.github.louch.devdesk.core.project.Workload;
@@ -52,8 +53,66 @@ public final class DockerImageReplay implements ImageReplay {
         }
     }
 
+    /** Which DevDesk made a replica: its PID and start time, so a dead owner's replicas can be told apart. */
+    static final String OWNER_LABEL = "devdesk.proof-owner";
+
+    private static Map<String, String> labels() {
+        return Map.of(PROOF_LABEL, "true", OWNER_LABEL, owner(ProcessHandle.current()));
+    }
+
+    /** "<pid>@<start instant>": a PID alone could be reused by another program after the owner died. */
+    static String owner(ProcessHandle p) {
+        return p.pid() + "@" + p.info().startInstant().map(Object::toString).orElse("?");
+    }
+
+    /**
+     * Removes replicas (and their networks) whose DevDesk died mid-proof (SIGKILL, crash): the owner label names a
+     * process that no longer exists, or a PID now used by a later program. A replica whose owner still runs (a proof
+     * in progress elsewhere) and anything without the proof label are never touched. Returns what was removed.
+     */
+    public List<String> removeAbandoned() {
+        List<String> removed = new ArrayList<>();
+        try {
+            for (var c : docker.listContainersCmd()
+                    .withShowAll(true)
+                    .withLabelFilter(Map.of(PROOF_LABEL, "true"))
+                    .exec()) {
+                if (abandoned(c.getLabels())) {
+                    docker.removeContainerCmd(c.getId())
+                            .withForce(true)
+                            .withRemoveVolumes(true)
+                            .exec();
+                    removed.add(c.getNames()[0].substring(1));
+                }
+            }
+            for (var n : docker.listNetworksCmd().exec()) {
+                if (n.getLabels() != null && n.getLabels().containsKey(PROOF_LABEL) && abandoned(n.getLabels())) {
+                    removeNetwork(n.getId());
+                    removed.add("network " + n.getName());
+                }
+            }
+        } catch (DockerException e) {
+            // Docker went away: tried again next time
+        }
+        return removed;
+    }
+
+    private static boolean abandoned(Map<String, String> labels) {
+        String owner = labels == null ? null : labels.get(OWNER_LABEL);
+        if (owner == null || !owner.contains("@")) {
+            return false; // no owner recorded: can't prove it's abandoned, so it's left alone
+        }
+        try {
+            long pid = Long.parseLong(owner.substring(0, owner.indexOf('@')));
+            return ProcessHandle.of(pid).map(p -> !owner(p).equals(owner)).orElse(true);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     @Override
     public Replica start(String image, Workload.Container c, Map<String, String> environment) throws LaunchException {
+        removeAbandoned(); // what a DevDesk killed mid-proof left
         byte[] bytes = new byte[4];
         random.nextBytes(bytes);
         String name = "devdesk-proof-" + HexFormat.of().formatHex(bytes);
@@ -63,7 +122,7 @@ public final class DockerImageReplay implements ImageReplay {
             network = docker.createNetworkCmd()
                     .withName(name)
                     .withDriver("bridge")
-                    .withLabels(Map.of(PROOF_LABEL, "true"))
+                    .withLabels(labels())
                     .exec()
                     .getId();
         } catch (DockerException e) {
@@ -77,7 +136,7 @@ public final class DockerImageReplay implements ImageReplay {
         try {
             var create = docker.createContainerCmd(image)
                     .withName(name)
-                    .withLabels(Map.of(PROOF_LABEL, "true"))
+                    .withLabels(labels())
                     .withEnv(environment.entrySet().stream()
                             .map(e -> e.getKey() + "=" + e.getValue())
                             .toList())
@@ -100,6 +159,7 @@ public final class DockerImageReplay implements ImageReplay {
         Replica replica = new Replica(id, name, Map.of());
         try {
             docker.startContainerCmd(id).exec();
+            CrashPoint.reach(CrashPoint.PROOF_STARTED);
             return new Replica(id, name, hostPorts(id));
         } catch (DockerException e) {
             remove(replica);

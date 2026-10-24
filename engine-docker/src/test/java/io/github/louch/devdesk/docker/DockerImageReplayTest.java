@@ -164,4 +164,49 @@ class DockerImageReplayTest {
         assertThat(String.join(" ", result.evidence())).contains("config error");
         assertThat(replay.leftoverProofs()).isEmpty();
     }
+
+    @Test
+    void onlyReplicasWhoseDevDeskDiedAreRemoved() throws Exception {
+        // A dead owner (a PID that doesn't exist), a live one (this test's own JVM), and no owner label at all.
+        String dead = Long.MAX_VALUE / 2 + "@2020-01-01T00:00:00Z";
+        String live = DockerImageReplay.owner(ProcessHandle.current());
+        List<String> ids = new java.util.ArrayList<>();
+        try {
+            for (var labels : List.of(
+                    Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, dead),
+                    Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, live),
+                    Map.of(DockerImageReplay.PROOF_LABEL, "true"))) {
+                ids.add(docker.createContainerCmd("alpine:3")
+                        .withCmd("sleep", "60")
+                        .withName(tag + "-" + ids.size())
+                        .withLabels(labels)
+                        .exec()
+                        .getId());
+            }
+
+            List<String> removed = replay.removeAbandoned();
+
+            assertThat(removed).contains(tag + "-0").doesNotContain(tag + "-1", tag + "-2");
+            assertThat(exists(ids.get(0))).isFalse();
+            assertThat(exists(ids.get(1))).isTrue();
+            assertThat(exists(ids.get(2))).isTrue();
+        } finally {
+            for (String id : ids) {
+                try {
+                    docker.removeContainerCmd(id).withForce(true).exec(); // this test's own containers
+                } catch (RuntimeException e) {
+                    // already removed by the cleanup under test
+                }
+            }
+        }
+    }
+
+    private boolean exists(String id) {
+        try {
+            docker.inspectContainerCmd(id).exec();
+            return true;
+        } catch (com.github.dockerjava.api.exception.NotFoundException e) {
+            return false;
+        }
+    }
 }
