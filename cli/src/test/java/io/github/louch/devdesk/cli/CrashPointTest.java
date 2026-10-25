@@ -240,6 +240,14 @@ class CrashPointTest {
         }
     }
 
+    private static boolean nonEmpty(Path file) {
+        try {
+            return Files.exists(file) && Files.size(file) > 0;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     // ---- helpers ----
 
     private Process cli(boolean scope, Path dir, String point, String... args) throws IOException {
@@ -289,13 +297,13 @@ class CrashPointTest {
 
     private static void awaitFile(Path file, Process p, List<String> out) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
-        while (System.nanoTime() < deadline && !Files.exists(file)) {
+        while (System.nanoTime() < deadline && !nonEmpty(file)) {
             if (!p.isAlive()) {
                 break;
             }
             Thread.sleep(50);
         }
-        assertThat(Files.exists(file))
+        assertThat(nonEmpty(file))
                 .as("crash point never reached:\n" + String.join("\n", out))
                 .isTrue();
     }

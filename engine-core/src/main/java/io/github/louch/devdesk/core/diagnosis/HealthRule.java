@@ -44,7 +44,7 @@ public final class HealthRule implements DiagnosisRule {
         evidence.add(
                 h.pids().isEmpty()
                         ? "no running processes found for " + service
-                        : service + " (PIDs " + h.pids() + ") listens on "
+                        : service + " (PIDs " + h.pids().stream().sorted().toList() + ") listens on "
                                 + (ports.isEmpty() ? "no TCP port" : "ports " + ports));
 
         List<String> actions = new ArrayList<>();

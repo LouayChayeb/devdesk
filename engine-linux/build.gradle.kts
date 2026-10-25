@@ -1,6 +1,7 @@
 // engine-linux: implements core's ports (interfaces) for Linux (/proc, cgroups, signals).
 plugins {
     id("devdesk.java-conventions")
+    id("devdesk.mutation")
     `java-library`
 }
 

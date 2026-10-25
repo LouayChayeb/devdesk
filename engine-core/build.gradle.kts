@@ -2,6 +2,7 @@
 // so it has NO project dependencies. Adding one here breaks the architecture.
 plugins {
     id("devdesk.java-conventions")
+    id("devdesk.mutation")
     `java-library`
 }
 

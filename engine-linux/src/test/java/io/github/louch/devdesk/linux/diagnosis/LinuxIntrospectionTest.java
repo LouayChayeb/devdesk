@@ -59,4 +59,69 @@ class LinuxIntrospectionTest {
             });
         }
     }
+
+    @Test
+    void describesALiveProcessWithItsCommandFolderAndParent(@TempDir Path dir) throws Exception {
+        Process p = new ProcessBuilder("sleep", "120").directory(dir.toFile()).start();
+        try {
+            var info = system.process(p.pid()).orElseThrow();
+
+            assertThat(info.pid()).isEqualTo(p.pid());
+            assertThat(info.parentPid()).isEqualTo(ProcessHandle.current().pid());
+            assertThat(info.command()).isEqualTo("sleep 120"); // NUL-separated arguments joined with spaces
+            assertThat(info.workingDirectory()).contains(dir.toRealPath());
+            assertThat(info.startedAt()).isPresent();
+
+            // Finding who works in a project's folder ("what's still running in ~/shop?").
+            assertThat(system.processesIn(dir)).extracting(i -> i.pid()).containsExactly(p.pid());
+            assertThat(system.processesIn(dir.resolve("elsewhere"))).isEmpty();
+        } finally {
+            p.destroyForcibly().waitFor();
+        }
+    }
+
+    @Test
+    void goneAndZombieProcessesAreNotReported() throws Exception {
+        Process gone = new ProcessBuilder("true").start();
+        gone.onExit().get(); // exited and collected
+        assertThat(system.process(gone.pid())).isEmpty();
+        assertThat(system.process(Long.MAX_VALUE)).isEmpty();
+
+        // `true` exits at once; its parent becomes `sleep`, which never collects it: a zombie until sleep ends.
+        Process parent = new ProcessBuilder("sh", "-c", "true & echo $!; exec sleep 120").start();
+        try {
+            long zombie = Long.parseLong(
+                    new java.io.BufferedReader(new java.io.InputStreamReader(parent.getInputStream())).readLine());
+            long deadline = System.nanoTime() + 2_000_000_000L;
+            while (!io.github.louch.devdesk.linux.process.ProcStat.read(zombie)
+                            .map(io.github.louch.devdesk.linux.process.ProcStat::isZombie)
+                            .orElse(false)
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(io.github.louch.devdesk.linux.process.ProcStat.read(zombie))
+                    .hasValueSatisfying(st -> assertThat(st.isZombie()).isTrue());
+            assertThat(system.process(zombie)).isEmpty();
+            assertThat(system.process(parent.pid())).isPresent();
+        } finally {
+            parent.destroyForcibly().waitFor();
+        }
+    }
+
+    @Test
+    void readFileReadsOnlySmallRegularFiles(@TempDir Path dir) throws Exception {
+        Path small = Files.writeString(dir.resolve(".env.example"), "PORT=3000\n");
+        Path exact = Files.write(dir.resolve("exact"), new byte[64 * 1024]);
+        Path big = Files.write(dir.resolve("big"), new byte[64 * 1024 + 1]);
+
+        assertThat(system.readFile(small)).contains("PORT=3000\n");
+        assertThat(system.readFile(exact)).isPresent();
+        assertThat(system.readFile(big)).isEmpty();
+        assertThat(system.readFile(dir)).isEmpty(); // a folder
+        assertThat(system.readFile(dir.resolve("missing"))).isEmpty();
+        Path tool = Files.writeString(dir.resolve("tool"), "#!/bin/sh\n");
+        tool.toFile().setExecutable(true);
+        assertThat(system.fileStatus(tool)).isEqualTo(FileStatus.EXECUTABLE);
+        assertThat(system.findExecutable("tool", "::" + dir)).contains(tool); // empty PATH entries are skipped
+    }
 }

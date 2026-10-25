@@ -2,6 +2,7 @@
 // MongoDB, HTTP, S3 storage, Elasticsearch, RabbitMQ and Kafka.
 plugins {
     id("devdesk.java-conventions")
+    id("devdesk.mutation")
     `java-library`
 }
 
@@ -14,3 +15,9 @@ dependencies {
     implementation(libs.kafka.clients)
     implementation(libs.jackson.databind) // the API client's saved requests file
 }
+
+// Mutation testing: these tests start real databases and brokers in Docker for every run (minutes per mutant).
+extra["pitestExcludedTests"] = listOf(
+    "ElasticSearchTest", "S3ObjectsTest", "KafkaTopicsTest", "MysqlTest", "PostgresEditorTest", "MongoBrowserTest",
+    "PostgresBrowserTest", "RabbitAdminTest", "SqsQueuesTest", "RedisBrowserTest",
+).joinToString(",") { "io.github.louch.devdesk.data.$it" }

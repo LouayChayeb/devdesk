@@ -91,4 +91,75 @@ class LocalHealthProbeTest {
         assertThat(result.detail()).contains("did not finish within 500 ms");
         assertThat(Duration.ofNanos(System.nanoTime() - before)).isLessThan(Duration.ofSeconds(5));
     }
+
+    @Test
+    void theStatusRangeIncludesBothEnds() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        for (int code : new int[] {199, 200, 299, 300}) {
+            server.createContext("/" + code, ex -> {
+                ex.sendResponseHeaders(code, -1);
+                ex.close();
+            });
+        }
+        server.start();
+        String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+        try {
+            assertThat(probe(new HealthCheckSpec.Http(URI.create(base + 200), 200, 299, FAST)))
+                    .isEqualTo(new ProbeResult.Passed("GET " + base + "200 → HTTP 200"));
+            assertThat(probe(new HealthCheckSpec.Http(URI.create(base + 299), 200, 299, FAST)))
+                    .isInstanceOf(ProbeResult.Passed.class);
+            assertThat(probe(new HealthCheckSpec.Http(URI.create(base + 199), 200, 299, FAST)))
+                    .isInstanceOf(ProbeResult.Failed.class);
+            assertThat(probe(new HealthCheckSpec.Http(URI.create(base + 300), 200, 299, FAST)))
+                    .isInstanceOf(ProbeResult.Failed.class);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void httpExplainsNothingListeningAndNoAnswer() throws Exception {
+        int closedPort;
+        try (ServerSocket s = new ServerSocket(0)) {
+            closedPort = s.getLocalPort();
+        }
+        URI refused = URI.create("http://127.0.0.1:" + closedPort + "/up");
+        assertThat(probe(new HealthCheckSpec.Http(refused, 200, 299, FAST)))
+                .isEqualTo(new ProbeResult.Failed("GET " + refused + ": connection refused (nothing listening yet?)"));
+
+        // Accepts the connection but never answers: a service stuck at startup.
+        try (ServerSocket silent = new ServerSocket(0)) {
+            URI stuck = URI.create("http://127.0.0.1:" + silent.getLocalPort() + "/up");
+            assertThat(probe(new HealthCheckSpec.Http(stuck, 200, 299, FAST)))
+                    .isEqualTo(new ProbeResult.Failed("GET " + stuck + " did not answer within 500 ms"));
+        }
+    }
+
+    @Test
+    void aTimedOutCommandLeavesNoProcessBehind() throws Exception {
+        java.nio.file.Path pidFile = java.nio.file.Files.createTempFile("health", ".pid");
+        probe(new HealthCheckSpec.Command("sleep 30 & echo $! > " + pidFile + "; wait", FAST));
+
+        long child = Long.parseLong(java.nio.file.Files.readString(pidFile).strip());
+        long deadline = System.nanoTime() + 2_000_000_000L;
+        while (ProcessHandle.of(child).map(ProcessHandle::isAlive).orElse(false) && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(ProcessHandle.of(child).map(ProcessHandle::isAlive).orElse(false))
+                .as("the check's child sleep was stopped with it")
+                .isFalse();
+        java.nio.file.Files.delete(pidFile);
+    }
+
+    @Test
+    void theRemainingKindsAnswerWithoutProbing() {
+        assertThat(probe(new HealthCheckSpec.ProcessAlive(FAST))).isEqualTo(new ProbeResult.Passed("process running"));
+        assertThat(probe(new HealthCheckSpec.Docker(FAST)))
+                .isEqualTo(new ProbeResult.Failed("type: docker checks are answered by Docker, not here"));
+        assertThat(probe.probe(new HealthCheckSpec.Command("true", FAST), Path.of("/no/such/folder"), System.getenv()))
+                .isInstanceOf(ProbeResult.Failed.class)
+                .extracting(ProbeResult::detail)
+                .asString()
+                .startsWith("Could not start 'health-check' in /no/such/folder");
+    }
 }

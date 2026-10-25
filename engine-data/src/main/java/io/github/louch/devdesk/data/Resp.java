@@ -141,44 +141,49 @@ final class Resp implements AutoCloseable {
 
     Reply read() {
         try {
-            int type = in.read();
-            if (type == -1) {
-                throw new EOFException("Redis closed the connection");
-            }
-            String line = line();
-            return switch (type) {
-                case '+' -> new Reply.Simple(line);
-                case '-' -> new Reply.Error(line);
-                case ':' -> new Reply.Int(Long.parseLong(line));
-                case '$' -> {
-                    int length = Integer.parseInt(line);
-                    if (length < 0) {
-                        yield new Reply.Bulk(null);
-                    }
-                    byte[] bytes = in.readNBytes(length);
-                    in.readNBytes(2); // the \r\n after the data
-                    yield new Reply.Bulk(bytes);
-                }
-                case '*' -> {
-                    int count = Integer.parseInt(line);
-                    if (count < 0) {
-                        yield new Reply.Array(null);
-                    }
-                    List<Reply> items = new ArrayList<>(count);
-                    for (int i = 0; i < count; i++) {
-                        items.add(read());
-                    }
-                    yield new Reply.Array(items);
-                }
-                default -> throw new IOException("unexpected reply type '" + (char) type + "' (is this really Redis?)");
-            };
+            return readReply(in);
         } catch (IOException e) {
             throw broken(e);
         }
     }
 
+    /** One reply from the stream. The parsing alone, so it can be tested and fuzzed without a socket. */
+    static Reply readReply(InputStream in) throws IOException {
+        int type = in.read();
+        if (type == -1) {
+            throw new EOFException("Redis closed the connection");
+        }
+        String line = line(in);
+        return switch (type) {
+            case '+' -> new Reply.Simple(line);
+            case '-' -> new Reply.Error(line);
+            case ':' -> new Reply.Int(Long.parseLong(line));
+            case '$' -> {
+                int length = Integer.parseInt(line);
+                if (length < 0) {
+                    yield new Reply.Bulk(null);
+                }
+                byte[] bytes = in.readNBytes(length);
+                in.readNBytes(2); // the \r\n after the data
+                yield new Reply.Bulk(bytes);
+            }
+            case '*' -> {
+                int count = Integer.parseInt(line);
+                if (count < 0) {
+                    yield new Reply.Array(null);
+                }
+                List<Reply> items = new ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    items.add(readReply(in));
+                }
+                yield new Reply.Array(items);
+            }
+            default -> throw new IOException("unexpected reply type '" + (char) type + "' (is this really Redis?)");
+        };
+    }
+
     /** One line up to \r\n, without it. */
-    private String line() throws IOException {
+    private static String line(InputStream in) throws IOException {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
         int c;
         while ((c = in.read()) != '\r') {

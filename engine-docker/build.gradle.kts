@@ -1,6 +1,7 @@
 // engine-docker: implements core's ports (interfaces) for Docker/Podman.
 plugins {
     id("devdesk.java-conventions")
+    id("devdesk.mutation")
     `java-library`
 }
 

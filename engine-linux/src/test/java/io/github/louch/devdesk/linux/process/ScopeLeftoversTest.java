@@ -24,7 +24,7 @@ class ScopeLeftoversTest {
                 "leftover-test", Path.of("/tmp", UUID.randomUUID().toString()), Map.of(), Map.of());
         var p = runtime.start(
                 new ProcessLaunchSpec(
-                        project.key(), "api", "sleep 1000 & sleep 1000 & wait", Path.of("/tmp"), System.getenv()),
+                        project.key(), "api", "sleep 120 & sleep 120 & wait", Path.of("/tmp"), System.getenv()),
                 line -> {});
         Thread.sleep(300);
 
@@ -37,7 +37,7 @@ class ScopeLeftoversTest {
             assertThat(l.kind()).isEqualTo(Leftover.Kind.PROCESS);
             assertThat(l.id()).startsWith("devdesk-" + project.key() + "--api-");
             assertThat(l.pids()).contains(p.pid());
-            assertThat(l.description()).isEqualTo("sleep 1000");
+            assertThat(l.description()).isEqualTo("sleep 120");
             assertThat(l.since()).isPresent();
         });
         assertThat(finder.remove(found.getFirst())).isEqualTo("stopped");
@@ -50,5 +50,40 @@ class ScopeLeftoversTest {
                 "leftover-test", Path.of("/tmp", UUID.randomUUID().toString()), Map.of(), Map.of());
 
         assertThat(new ScopeLeftovers().find(project)).isEmpty();
+    }
+
+    @Test
+    void aLeftoverThatIgnoresSigtermIsKilledThroughItsCgroup() throws Exception {
+        var runtime = LinuxProcessRuntime.detect(Clock.systemUTC(), new Random());
+        assumeTrue(runtime.usesSystemdScope(), "no systemd user session");
+        var project = new ProjectSpec(
+                "leftover-test", Path.of("/tmp", UUID.randomUUID().toString()), Map.of(), Map.of());
+        var p = runtime.start(
+                new ProcessLaunchSpec(
+                        project.key(), "worker", "trap '' TERM; sleep 120 & wait", Path.of("/tmp"), System.getenv()),
+                line -> {});
+        Thread.sleep(300);
+        var finder = new ScopeLeftovers();
+
+        var found = finder.find(project);
+        assertThat(found).singleElement().satisfies(l -> assertThat(l.service()).isEqualTo("worker"));
+
+        assertThat(finder.remove(found.getFirst())).isEqualTo("force-killed: it ignored SIGTERM for 10 s");
+        assertThat(ProcessHandle.of(p.pid()).map(ProcessHandle::isAlive).orElse(false))
+                .isFalse();
+        assertThat(finder.find(project)).isEmpty();
+    }
+
+    @Test
+    void removingAScopeThatIsAlreadyGoneIsStopped() {
+        var gone = new Leftover(
+                "api",
+                Leftover.Kind.PROCESS,
+                "devdesk-nobody-00000000--api-0.scope",
+                java.util.Set.of(),
+                "x",
+                java.util.Optional.empty());
+
+        assertThat(new ScopeLeftovers().remove(gone)).isEqualTo("stopped");
     }
 }

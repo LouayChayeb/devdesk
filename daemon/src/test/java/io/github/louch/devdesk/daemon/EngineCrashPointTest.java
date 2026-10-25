@@ -170,6 +170,14 @@ class EngineCrashPointTest {
         }
     }
 
+    private static boolean nonEmpty(Path file) {
+        try {
+            return Files.exists(file) && Files.size(file) > 0;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     // ---- helpers ----
 
     @SuppressWarnings("unchecked")
@@ -193,10 +201,10 @@ class EngineCrashPointTest {
 
     private static void awaitFile(Path file, Process p) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
-        while (System.nanoTime() < deadline && !Files.exists(file) && p.isAlive()) {
+        while (System.nanoTime() < deadline && !nonEmpty(file) && p.isAlive()) {
             Thread.sleep(50);
         }
-        assertThat(Files.exists(file)).as("crash point never reached").isTrue();
+        assertThat(nonEmpty(file)).as("crash point never reached").isTrue();
     }
 
     private static List<Long> processes(long unique) throws IOException {

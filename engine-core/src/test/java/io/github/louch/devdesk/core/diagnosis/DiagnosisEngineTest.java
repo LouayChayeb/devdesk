@@ -229,4 +229,54 @@ class DiagnosisEngineTest {
         assertThat(titles(findings)).containsExactly("Rule broken failed", "Port 80 is already in use");
         assertThat(findings.getLast().explanation()).contains("a process of another user (uid 0)");
     }
+
+    @Test
+    void aBlockedLoopStopsInsteadOfWalkingForever() throws Exception {
+        // Shouldn't happen (the graph has no cycles) but states arrive from many threads: never hang on them.
+        states.put("api", new ServiceState.Blocked("web is blocked", "web"));
+        states.put("web", new ServiceState.Blocked("api is blocked", "api"));
+
+        var c = ctx("""
+                version: 1
+                services:
+                  api: { command: x }
+                  web: { command: y }
+                """);
+
+        assertThat(DiagnosisEngine.causeChain(c, "web")).containsExactly("api", "web");
+        assertThat(DiagnosisEngine.causeChain(c, "nobody")).containsExactly("nobody");
+    }
+
+    @Test
+    void watchRunsOnlyTheContinuousRules() throws Exception {
+        DiagnosisRule slow = rule("slow", true);
+        DiagnosisRule instant = rule("instant", false);
+        var c = ctx("""
+                version: 1
+                services:
+                  api: { command: x }
+                """);
+
+        var engine = new DiagnosisEngine(List.of(slow, instant));
+
+        assertThat(titles(engine.watch(c, "api"))).containsExactly("slow on api");
+        assertThat(titles(engine.explain(c, "api"))).containsExactly("slow on api", "instant on api");
+    }
+
+    private static DiagnosisRule rule(String id, boolean continuous) {
+        return new DiagnosisRule() {
+            public String id() {
+                return id;
+            }
+
+            public boolean continuous() {
+                return continuous;
+            }
+
+            public List<Finding> evaluate(DiagnosisContext c, String s) {
+                return List.of(
+                        new Finding(id, Finding.Severity.WARNING, s, id + " on " + s, "x", List.of(), List.of()));
+            }
+        };
+    }
 }

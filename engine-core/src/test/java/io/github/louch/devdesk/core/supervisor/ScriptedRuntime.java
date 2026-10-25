@@ -19,12 +19,14 @@ import java.util.function.Consumer;
 
 /**
  * A fake ProcessRuntime whose processes do what their command says: "serve" runs until signalled, "exit N" ends at
- * once with code N, "no-launch" can't be started. Records the order of starts and stops.
+ * once with code N, "no-launch" can't be started, "stubborn" ignores SIGTERM (only SIGKILL ends it). Records the order
+ * of starts and stops.
  */
 final class ScriptedRuntime implements ProcessRuntime {
 
     final List<String> started = new CopyOnWriteArrayList<>();
     final List<String> stopped = new CopyOnWriteArrayList<>();
+    private final Set<RunningProcess> stubborn = ConcurrentHashMap.newKeySet();
     private final AtomicLong nextPid = new AtomicLong(1000);
     private final Map<RunningProcess, CompletableFuture<ExitStatus>> exits = new ConcurrentHashMap<>();
 
@@ -37,6 +39,9 @@ final class ScriptedRuntime implements ProcessRuntime {
         var p = new RunningProcess(spec.name(), nextPid.incrementAndGet(), Instant.EPOCH);
         var exit = new CompletableFuture<ExitStatus>();
         exits.put(p, exit);
+        if (spec.command().equals("stubborn")) {
+            stubborn.add(p);
+        }
         if (spec.command().startsWith("exit ")) {
             exit.complete(ExitStatus.of(Integer.parseInt(spec.command().substring(5))));
         }
@@ -47,6 +52,9 @@ final class ScriptedRuntime implements ProcessRuntime {
     public void signal(RunningProcess p, Signal signal) {
         if (signal == Signal.TERM) {
             stopped.add(p.name());
+            if (stubborn.contains(p)) {
+                return; // ignored, like a program with trap '' TERM
+            }
         }
         exits.get(p).complete(ExitStatus.of(signal == Signal.KILL ? 137 : 143));
     }

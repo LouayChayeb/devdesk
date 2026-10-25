@@ -52,4 +52,26 @@ class ServiceEnvironmentTest {
         assertThat(find("db", "POSTGRES_PASSWORD").looksSecret()).isTrue();
         assertThat(find("api", "PORT").looksSecret()).isFalse();
     }
+
+    @Test
+    void aTaskGetsTheShellThenTheEnvFilesThenItsOwnBlock() throws Exception {
+        var project = ConfigParser.parse("""
+                version: 1
+                env_files: [.env]
+                services:
+                  api: { command: x }
+                tasks:
+                  seed: { command: ./seed.sh, environment: { LOG: trace } }
+                """, Path.of("/p"), Map.of(), f -> Optional.of("PORT=8080\nLOG=warn\n"));
+
+        var values = ServiceEnvironment.forTask(project, project.tasks().get("seed"), shell);
+
+        assertThat(values)
+                .containsEntry("PYTHONUNBUFFERED", "1")
+                .containsEntry("HOME", "/home/me")
+                .containsEntry("PORT", "8080")
+                .containsEntry("LOG", "trace"); // the task's own block beats .env's warn and the shell's info
+        assertThat(ServiceEnvironment.forTask(project, project.tasks().get("seed"), Map.of("FORCE_COLOR", "0")))
+                .containsEntry("FORCE_COLOR", "0"); // your shell beats DevDesk's defaults
+    }
 }

@@ -3,6 +3,7 @@
 // Since ADR 0005 it isn't a background daemon: the desktop app starts it as its "engine" and stops it on close.
 plugins {
     id("devdesk.java-conventions")
+    id("devdesk.mutation")
     application // adds ./gradlew :daemon:run and packages a start script
 }
 
@@ -27,3 +28,8 @@ application {
 tasks.test {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
+
+// Mutation testing: these tests drive the real engine in a child JVM, where PIT's mutants don't exist.
+extra["pitestExcludedTests"] = listOf(
+    "ApiSecurityTest", "EngineCrashPointTest", "ExtrasTest", "EngineHardKillTest", "EngineProcessTest",
+).joinToString(",") { "io.github.louch.devdesk.daemon.$it" }

@@ -171,11 +171,21 @@ class DockerImageReplayTest {
         String dead = Long.MAX_VALUE / 2 + "@2020-01-01T00:00:00Z";
         String live = DockerImageReplay.owner(ProcessHandle.current());
         List<String> ids = new java.util.ArrayList<>();
+        List<String> networks = new java.util.ArrayList<>();
         try {
             for (var labels : List.of(
                     Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, dead),
                     Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, live),
-                    Map.of(DockerImageReplay.PROOF_LABEL, "true"))) {
+                    Map.of(DockerImageReplay.PROOF_LABEL, "true"),
+                    // This JVM's PID with another start time: the PID was reused, so its DevDesk is dead.
+                    Map.of(
+                            DockerImageReplay.PROOF_LABEL,
+                            "true",
+                            DockerImageReplay.OWNER_LABEL,
+                            ProcessHandle.current().pid() + "@2020-01-01T00:00:00Z"),
+                    // Owners that prove nothing: no '@', or not a number before it.
+                    Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, "nonsense"),
+                    Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, "abc@x"))) {
                 ids.add(docker.createContainerCmd("alpine:3")
                         .withCmd("sleep", "60")
                         .withName(tag + "-" + ids.size())
@@ -184,13 +194,35 @@ class DockerImageReplayTest {
                         .getId());
             }
 
+            String deadNetwork = docker.createNetworkCmd()
+                    .withName(tag + "-dead-net")
+                    .withLabels(Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, dead))
+                    .exec()
+                    .getId();
+            networks.add(deadNetwork);
+            networks.add(docker.createNetworkCmd()
+                    .withName(tag + "-live-net")
+                    .withLabels(Map.of(DockerImageReplay.PROOF_LABEL, "true", DockerImageReplay.OWNER_LABEL, live))
+                    .exec()
+                    .getId());
+
             List<String> removed = replay.removeAbandoned();
 
-            assertThat(removed).contains(tag + "-0").doesNotContain(tag + "-1", tag + "-2");
-            assertThat(exists(ids.get(0))).isFalse();
-            assertThat(exists(ids.get(1))).isTrue();
-            assertThat(exists(ids.get(2))).isTrue();
+            assertThat(removed)
+                    .contains(tag + "-0", tag + "-3", "network " + tag + "-dead-net")
+                    .doesNotContain(tag + "-1", tag + "-2", tag + "-4", tag + "-5", "network " + tag + "-live-net");
+            assertThat(ids).extracting(this::exists).containsExactly(false, true, true, false, true, true);
+            assertThat(replay.leftoverProofs())
+                    .contains(tag + "-1", tag + "-live-net")
+                    .doesNotContain(tag + "-0", tag + "-dead-net");
         } finally {
+            for (String id : networks) {
+                try {
+                    docker.removeNetworkCmd(id).exec(); // this test's own networks
+                } catch (RuntimeException e) {
+                    // already removed by the cleanup under test
+                }
+            }
             for (String id : ids) {
                 try {
                     docker.removeContainerCmd(id).withForce(true).exec(); // this test's own containers

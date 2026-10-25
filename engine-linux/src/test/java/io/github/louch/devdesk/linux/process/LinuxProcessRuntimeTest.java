@@ -71,7 +71,7 @@ class LinuxProcessRuntimeTest {
     @ValueSource(booleans = {true, false})
     void stopLeavesNoChildOrGrandchildBehind(boolean scope) throws Exception {
         var runtime = runtime(scope);
-        var p = start(runtime, "sleep 1000 & (sleep 1000 & wait) & wait");
+        var p = start(runtime, "sleep 120 & (sleep 120 & wait) & wait");
         // sh, its sleep, the ( ... ) subshell, and the subshell's sleep: a grandchild
         awaitTrue(() -> runtime.members(p).size() == 4);
         Set<Long> family = runtime.members(p);
@@ -89,7 +89,7 @@ class LinuxProcessRuntimeTest {
     void childIgnoringSigtermIsForceKilledAfterGracePeriod(boolean scope) throws Exception {
         var runtime = runtime(scope);
         // trap '' TERM = ignore SIGTERM; ignored signals stay ignored in children too (kept across exec).
-        var p = start(runtime, "trap '' TERM; sleep 1000 & sleep 1000 & wait");
+        var p = start(runtime, "trap '' TERM; sleep 120 & sleep 120 & wait");
         awaitTrue(() -> runtime.members(p).size() == 3);
 
         var result = new GracefulStop(runtime).stop(p, Duration.ofMillis(300));
@@ -115,7 +115,7 @@ class LinuxProcessRuntimeTest {
     @ValueSource(booleans = {true, false})
     void commandThatExitsAtOnceButLeavesAChildIsStillOwned(boolean scope) throws Exception {
         var runtime = runtime(scope);
-        var p = start(runtime, "sleep 1000 & exit 0");
+        var p = start(runtime, "sleep 120 & exit 0");
         assertThat(runtime.onExit(p).get(5, TimeUnit.SECONDS)).isEqualTo(ExitStatus.of(0));
         awaitTrue(() -> runtime.members(p).size() == 1); // the top shell is gone, its sleep is not
         Set<Long> leftover = runtime.members(p);
@@ -131,7 +131,7 @@ class LinuxProcessRuntimeTest {
     @ValueSource(booleans = {true})
     void scopeCatchesAProcessThatEscapesItsGroup(boolean scope) throws Exception {
         var runtime = runtime(scope);
-        var p = start(runtime, "setsid sleep 1000 & wait");
+        var p = start(runtime, "setsid sleep 120 & wait");
         awaitTrue(() -> runtime.members(p).size() == 2);
         Set<Long> family = runtime.members(p);
 
@@ -145,7 +145,7 @@ class LinuxProcessRuntimeTest {
     @ValueSource(booleans = {false})
     void withoutSystemdAnEscapedProcessSurvives_knownWeakness(boolean scope) throws Exception {
         var runtime = runtime(scope);
-        var p = start(runtime, "setsid sleep 1000 & wait");
+        var p = start(runtime, "setsid sleep 120 & wait");
         awaitTrue(() -> ProcessHandle.of(p.pid()).orElseThrow().children().count() == 1);
         ProcessHandle escaper =
                 ProcessHandle.of(p.pid()).orElseThrow().children().findFirst().orElseThrow();

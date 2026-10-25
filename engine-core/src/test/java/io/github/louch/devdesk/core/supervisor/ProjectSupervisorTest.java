@@ -480,6 +480,104 @@ class ProjectSupervisorTest {
         assertThat(diagnosis.findings()).extracting(f -> f.ruleId()).containsExactly("program-missing");
     }
 
+    @Test
+    void aServiceThatIgnoresSigtermIsForceKilledAndThePersonIsTold() throws Exception {
+        var s = supervisor("""
+                version: 1
+                services:
+                  worker: { command: stubborn, stop_grace_period: 1s }
+                """);
+        s.up().get(10, TimeUnit.SECONDS);
+
+        var states = s.down().get(10, TimeUnit.SECONDS);
+
+        assertThat(states.get("worker")).isInstanceOf(ServiceState.Stopped.class);
+        assertThat(events)
+                .contains(new ProjectEvent.Warning("worker", "ignored SIGTERM for 1s and was force-killed (SIGKILL)"));
+    }
+
+    @Test
+    void restartsWaitLongerEachTime() throws Exception {
+        var s = supervisor("""
+                version: 1
+                services:
+                  worker: { command: exit 1, restart: on-failure }
+                """);
+        s.up().get(10, TimeUnit.SECONDS);
+        awaitState(s, "worker", ServiceState.CrashLoop.class);
+
+        List<Long> delays = events.stream()
+                .filter(e ->
+                        e instanceof ProjectEvent.StateChanged c && c.reason().startsWith("restarting after "))
+                .map(e -> ((ProjectEvent.StateChanged) e).reason())
+                .peek(r -> assertThat(r).endsWith(" ms (on-failure)"))
+                .map(r -> Long.parseLong(r.substring("restarting after ".length(), r.indexOf(" ms"))))
+                .toList();
+        // 5 ms base in these tests, doubling each time, plus at most 10% jitter.
+        assertThat(delays).hasSize(ProjectSupervisor.MAX_RESTARTS);
+        for (int i = 0; i < delays.size(); i++) {
+            long base = 5L << i;
+            assertThat(delays.get(i)).as("restart %d", i + 1).isBetween(base, base + base / 10);
+        }
+        assertThat(transitions()).last().isEqualTo("worker→crash-loop");
+    }
+
+    @Test
+    void onFailureLeavesACleanExitAloneButAlwaysRestartsIt() throws Exception {
+        var s = supervisor("""
+                version: 1
+                services:
+                  once: { command: exit 0, restart: on-failure }
+                  again: { command: exit 0, restart: always }
+                """);
+        s.up().get(10, TimeUnit.SECONDS);
+        // "always" restarts even after code 0. A clean exit isn't a crash, so it never becomes a crash loop: it keeps
+        // restarting, waiting longer each time (like Docker's restart: always).
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (runtime.started.stream().filter("again"::equals).count() < 3 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(runtime.started.stream().filter("again"::equals)).hasSizeGreaterThanOrEqualTo(3);
+
+        assertThat(runtime.started.stream().filter("once"::equals)).hasSize(1);
+        assertThat(s.snapshot().get().get("once")).isInstanceOf(ServiceState.Completed.class);
+    }
+
+    @Test
+    void whyADependencyWillNeverBeReadyIsSaidInItsOwnWords() throws Exception {
+        Map<String, ServiceState> states = supervisor("""
+                version: 1
+                services:
+                  seed: { command: exit 0, health: { type: command, command: seed, %s } }
+                  setup: { command: exit 0 }
+                  api: { command: serve, depends_on: { seed: { condition: healthy } } }
+                  web: { command: serve, depends_on: [setup] }
+                """.formatted(FAST)).up().get(10, TimeUnit.SECONDS);
+
+        assertThat(states.get("api"))
+                .isEqualTo(new ServiceState.Blocked("seed exited (code 0) before ever becoming healthy", "seed"));
+        // "started" is satisfied by a service that ran and finished: web isn't blocked by setup.
+        assertThat(states.get("web")).isInstanceOf(ServiceState.Running.class);
+    }
+
+    @Test
+    void aStoppedDependencyBlocksWhatIsStartedAlone() throws Exception {
+        var s = supervisor("""
+                version: 1
+                services:
+                  db: { command: serve }
+                  api: { command: serve, depends_on: [db] }
+                """);
+        s.up().get(10, TimeUnit.SECONDS);
+        s.stopService("db").get(10, TimeUnit.SECONDS); // takes api down with it
+
+        var states = s.startService("api").get(10, TimeUnit.SECONDS); // starts db again first
+
+        assertThat(states.get("db")).isInstanceOf(ServiceState.Running.class);
+        assertThat(states.get("api")).isInstanceOf(ServiceState.Running.class);
+        assertThat(runtime.started).containsExactly("db", "api", "db", "api");
+    }
+
     private static void awaitState(ProjectSupervisor s, String service, Class<? extends ServiceState> type)
             throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);

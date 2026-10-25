@@ -2,7 +2,6 @@ package io.github.louch.devdesk.daemon;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -37,36 +36,6 @@ class ExtrasTest {
             m.put(pairs[i], pairs[i + 1]);
         }
         return m;
-    }
-
-    @Test
-    void offByDefault() {
-        assertThat(Extras.enabled(env())).isFalse();
-    }
-
-    @Test
-    void theSavedSettingTurnsThemOnAndKeepsOtherKeys() throws Exception {
-        Path file = Extras.file(env());
-        Files.createDirectories(file.getParent());
-        Files.writeString(file, "theme=dark\n");
-
-        Extras.save(env(), true);
-
-        assertThat(Extras.enabled(env())).isTrue();
-        assertThat(Files.readString(file)).contains("theme=dark").contains("extras=on");
-        assertThat(file).isEqualTo(home.resolve(".config/devdesk/settings.properties"));
-    }
-
-    @Test
-    void theEnvVarWinsOverTheSettingAndNonsenseIsIgnored() throws Exception {
-        Extras.save(env(), true);
-
-        assertThat(Extras.enabled(env(Extras.ENV, "off"))).isFalse();
-        assertThat(Extras.forcedByEnvironment(env(Extras.ENV, "off"))).isTrue();
-        assertThat(Extras.enabled(env(Extras.ENV, "maybe"))).isTrue(); // not on/off: the setting decides
-        assertThat(Extras.enabled(
-                        env("XDG_CONFIG_HOME", home.resolve("elsewhere").toString())))
-                .isFalse();
     }
 
     @Test

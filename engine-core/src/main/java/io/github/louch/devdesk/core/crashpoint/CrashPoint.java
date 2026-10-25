@@ -50,8 +50,11 @@ public final class CrashPoint {
             return;
         }
         try {
-            Files.writeString(
-                    Path.of(FILE), point + " " + ProcessHandle.current().pid() + "\n", StandardCharsets.UTF_8);
+            // Written next to it, then renamed: the test never reads a half-written file.
+            Path file = Path.of(FILE);
+            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+            Files.writeString(tmp, point + " " + ProcessHandle.current().pid() + "\n", StandardCharsets.UTF_8);
+            Files.move(tmp, file, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
             throw new IllegalStateException("crash point " + point + ": can't write " + FILE, e);
         }

@@ -58,7 +58,9 @@ class OwnershipFuzzTest {
         Path log = dir.resolve("bystander-" + n + ".log");
         Files.writeString(log, "");
         String script = "for s in TERM INT HUP USR1 USR2; do trap \"echo $s >> " + log + "\" $s; done;"
-                + " while true; do sleep 0.1; done";
+                // Ends by itself once this test's JVM is gone (kill -0 sends no signal, it only asks "alive?"): a
+                // JVM killed mid-test (a timeout under mutation testing) runs no @AfterEach, so nothing else would.
+                + " while kill -0 " + ProcessHandle.current().pid() + " 2>/dev/null; do sleep 0.1; done";
         List<String> cmd = new ArrayList<>(ownSession ? List.of("setsid") : List.of());
         cmd.addAll(List.of("sh", "-c", script));
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();

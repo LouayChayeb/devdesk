@@ -953,24 +953,33 @@ final class ApiServer {
             ctx.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             ctx.header("Vary", "Origin");
         }
-        if (!hostAllowed(ctx.host())) {
-            ctx.status(403).json(ApiJson.error("wrong Host header: DevDesk only answers on 127.0.0.1"));
-            ctx.skipRemainingHandlers();
-            return;
+        refusal(ctx.host(), origin, ctx.method().name(), ctx.path(), ctx.header("Authorization"), token)
+                .ifPresent(r -> {
+                    ctx.status(r.status()).json(ApiJson.error(r.message()));
+                    ctx.skipRemainingHandlers();
+                });
+    }
+
+    /** Why a request is turned away: the HTTP status and a message for the caller. */
+    record Refusal(int status, String message) {}
+
+    /** The three checks of {@link #guard}, as a plain function of the request: empty means it may go on. */
+    static Optional<Refusal> refusal(
+            String host, String origin, String method, String path, String authorization, byte[] token) {
+        if (!hostAllowed(host)) {
+            return Optional.of(new Refusal(403, "wrong Host header: DevDesk only answers on 127.0.0.1"));
         }
         if (!originAllowed(origin)) {
-            ctx.status(403).json(ApiJson.error("requests from " + origin + " are not allowed"));
-            ctx.skipRemainingHandlers();
-            return;
+            return Optional.of(new Refusal(403, "requests from " + origin + " are not allowed"));
         }
-        boolean preflight = ctx.method().name().equals("OPTIONS"); // browsers send these without the token
+        boolean preflight = method.equals("OPTIONS"); // browsers send these without the token
         // WebSockets: checked in onConnect (browsers can't send the header there)
-        boolean events = ctx.path().equals("/api/v1/events") || ctx.path().equals("/api/v1/terminal");
-        String auth = ctx.header("Authorization");
-        if (!preflight && !events && !tokenMatches(auth == null ? null : auth.replaceFirst("^Bearer ", ""))) {
-            ctx.status(401).json(ApiJson.error("missing or wrong token"));
-            ctx.skipRemainingHandlers();
+        boolean sockets = path.equals("/api/v1/events") || path.equals("/api/v1/terminal");
+        String given = authorization == null ? null : authorization.replaceFirst("^Bearer ", "");
+        if (!preflight && !sockets && !tokenMatches(token, given)) {
+            return Optional.of(new Refusal(401, "missing or wrong token"));
         }
+        return Optional.empty();
     }
 
     private static int parseIntOr(String text, int fallback) {
@@ -983,10 +992,14 @@ final class ApiServer {
 
     /** Constant-time comparison, so the response time doesn't hint at how much of a guess was right. */
     private boolean tokenMatches(String given) {
+        return tokenMatches(token, given);
+    }
+
+    static boolean tokenMatches(byte[] token, String given) {
         return given != null && MessageDigest.isEqual(token, given.getBytes(StandardCharsets.UTF_8));
     }
 
-    private static boolean hostAllowed(String host) {
+    static boolean hostAllowed(String host) {
         if (host == null) {
             return false;
         }
@@ -995,7 +1008,7 @@ final class ApiServer {
     }
 
     /** No Origin at all = not a browser page (e.g. curl or the Tauri Rust side): allowed, the token still applies. */
-    private static boolean originAllowed(String origin) {
+    static boolean originAllowed(String origin) {
         return origin == null || ALLOWED_ORIGINS.contains(origin);
     }
 
