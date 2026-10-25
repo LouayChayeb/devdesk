@@ -10,6 +10,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Finds the Docker (or Podman) API socket and connects to it, or explains why it can't.
@@ -44,7 +48,38 @@ public final class DockerConnection {
                     "no permission to use Docker's socket " + file + ". Add yourself to the docker "
                             + "group (sudo usermod -aG docker $USER), then log out and back in");
         }
-        DockerClient client = DockerClientImpl.getInstance(
+        // First a ping with a time limit. A Docker that accepts the connection but never answers would otherwise
+        // hang DevDesk at startup forever: the client has no read timeout (log streams and "wait for exit" stay open
+        // as long as a container runs), and docker-java's response timeout doesn't apply on a Unix socket. So the
+        // ping runs on its own (virtual) thread and DevDesk stops waiting after PING_TIMEOUT. If that read stays
+        // blocked anyway, it's one parked virtual thread, which doesn't keep DevDesk running.
+        DockerClient ping = client(socket);
+        try {
+            CompletableFuture.runAsync(() -> ping.pingCmd().exec(), Thread::startVirtualThread)
+                    .get(PING_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            return stuck(file, "no answer within " + PING_TIMEOUT.toSeconds() + " s");
+        } catch (ExecutionException e) {
+            return stuck(file, e.getCause().getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return stuck(file, "interrupted");
+        } finally {
+            closeQuietly(ping);
+        }
+        return new Result.Connected(new DockerContainerRuntime(client(socket)), socket);
+    }
+
+    private static Result stuck(Path file, String why) {
+        return new Result.Unavailable("Docker's socket " + file + " exists but Docker didn't answer (" + why
+                + "). Is the Docker daemon starting or stuck? Try: docker info");
+    }
+
+    /** How long Docker gets to answer the first ping. */
+    static final Duration PING_TIMEOUT = Duration.ofSeconds(5);
+
+    private static DockerClient client(String socket) {
+        return DockerClientImpl.getInstance(
                 DefaultDockerClientConfig.createDefaultConfigBuilder()
                         .withDockerHost(socket)
                         .build(),
@@ -55,14 +90,6 @@ public final class DockerConnection {
                         .responseTimeout(Duration.ZERO)
                         .maxConnections(100)
                         .build());
-        try {
-            client.pingCmd().exec();
-            return new Result.Connected(new DockerContainerRuntime(client), socket);
-        } catch (RuntimeException e) {
-            closeQuietly(client);
-            return new Result.Unavailable("Docker's socket " + file + " exists but Docker didn't answer ("
-                    + e.getMessage() + "). Is the Docker daemon starting or stuck? Try: docker info");
-        }
     }
 
     /** Where Docker's (or Podman's) API socket is, as {@code unix:///path}; it may not exist. */
