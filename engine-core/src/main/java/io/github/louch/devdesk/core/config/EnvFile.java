@@ -10,7 +10,8 @@ public final class EnvFile {
 
     public static Map<String, String> parse(String content) {
         Map<String, String> vars = new LinkedHashMap<>();
-        for (String raw : content.split("\n")) {
+        // lines() splits at \n, \r\n and a lone \r, exactly like EnvFileEdit, so both see the same lines.
+        for (String raw : content.lines().toList()) {
             String line = raw.strip();
             if (line.isEmpty() || line.startsWith("#")) {
                 continue;
@@ -23,10 +24,11 @@ public final class EnvFile {
                 continue; // not KEY=value; .env files in the wild contain all sorts of things
             }
             String value = line.substring(eq + 1).strip();
-            if (value.length() >= 2
-                    && (value.startsWith("\"") && value.endsWith("\"")
-                            || value.startsWith("'") && value.endsWith("'"))) {
-                value = value.substring(1, value.length() - 1);
+            if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+                // Inside double quotes \" and \\ stand for " and \ (what EnvFileEdit writes); others stay as typed.
+                value = value.substring(1, value.length() - 1).replaceAll("\\\\([\"\\\\])", "$1");
+            } else if (value.length() >= 2 && value.startsWith("'") && value.endsWith("'")) {
+                value = value.substring(1, value.length() - 1); // single quotes: every character literally
             }
             vars.put(line.substring(0, eq).strip(), value);
         }

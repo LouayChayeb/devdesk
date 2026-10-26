@@ -14,3 +14,6 @@ out/
 
 # Python bytecode cache (created when the examples run)
 __pycache__/
+
+# Jazzer: the fuzzer's working corpus (interesting inputs found while fuzzing; crashes are kept as test inputs)
+.cifuzz-corpus/

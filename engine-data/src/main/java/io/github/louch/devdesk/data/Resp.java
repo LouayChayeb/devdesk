@@ -157,22 +157,29 @@ final class Resp implements AutoCloseable {
         return switch (type) {
             case '+' -> new Reply.Simple(line);
             case '-' -> new Reply.Error(line);
-            case ':' -> new Reply.Int(Long.parseLong(line));
+            case ':' -> new Reply.Int(number(line));
             case '$' -> {
-                int length = Integer.parseInt(line);
+                long length = number(line);
                 if (length < 0) {
                     yield new Reply.Bulk(null);
                 }
-                byte[] bytes = in.readNBytes(length);
+                if (length > Integer.MAX_VALUE) {
+                    throw new IOException("a value of " + length + " bytes (is this really Redis?)");
+                }
+                byte[] bytes = in.readNBytes((int) length);
+                if (bytes.length < length) {
+                    throw new EOFException("Redis closed the connection mid-value");
+                }
                 in.readNBytes(2); // the \r\n after the data
                 yield new Reply.Bulk(bytes);
             }
             case '*' -> {
-                int count = Integer.parseInt(line);
+                long count = number(line);
                 if (count < 0) {
                     yield new Reply.Array(null);
                 }
-                List<Reply> items = new ArrayList<>(count);
+                // Not sized from the count: a broken "*2000000000" must not allocate before a single item has arrived.
+                List<Reply> items = new ArrayList<>();
                 for (int i = 0; i < count; i++) {
                     items.add(readReply(in));
                 }
@@ -180,6 +187,15 @@ final class Resp implements AutoCloseable {
             }
             default -> throw new IOException("unexpected reply type '" + (char) type + "' (is this really Redis?)");
         };
+    }
+
+    /** A length or an integer; text that isn't one means the other end doesn't speak RESP. */
+    private static long number(String line) throws IOException {
+        try {
+            return Long.parseLong(line);
+        } catch (NumberFormatException e) {
+            throw new IOException("expected a number, got \"" + line + "\" (is this really Redis?)");
+        }
     }
 
     /** One line up to \r\n, without it. */

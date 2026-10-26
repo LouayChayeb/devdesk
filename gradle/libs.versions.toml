@@ -25,6 +25,8 @@ checkstyle = "14.3.0"
 # Mutation testing (PIT): PIT's command-line runner and its JUnit Platform connector.
 pitest = "1.30.1"
 pitest-junit5 = "1.2.3"
+# Coverage-guided fuzzing (Jazzer): @FuzzTest methods, run as normal tests or, with JAZZER_FUZZ=1, as a fuzzer.
+jazzer = "0.30.0"
 
 [libraries]
 # The BOM (bill of materials) pins every JUnit artifact to the same version.
@@ -55,3 +57,4 @@ jackson-yaml = { module = "tools.jackson.dataformat:jackson-dataformat-yaml", ve
 spotless-gradle-plugin = { module = "com.diffplug.spotless:spotless-plugin-gradle", version.ref = "spotless" }
 pitest-command-line = { module = "org.pitest:pitest-command-line", version.ref = "pitest" }
 pitest-junit5-plugin = { module = "org.pitest:pitest-junit5-plugin", version.ref = "pitest-junit5" }
+jazzer-junit = { module = "com.code-intelligence:jazzer-junit", version.ref = "jazzer" }

@@ -54,4 +54,25 @@ class CurlTest {
         assertThat(Curl.of(new HttpCall("GET", "http://x/", List.of(), Optional.empty())))
                 .isEqualTo("curl 'http://x/'");
     }
+
+    // Found by the fuzzer (HttpImportFuzzTest.curl): "copy as curl" must read back as the same request.
+
+    @Test
+    void aUrlStartingWithADashIsWrittenWithUrl() {
+        HttpCall call = Curl.parse("curl --url -weird");
+        assertThat(Curl.of(call)).isEqualTo("curl --url '-weird'");
+        assertThat(Curl.parse(Curl.of(call)).url()).isEqualTo("-weird");
+    }
+
+    @Test
+    void aBackslashLineBreakJoinsLinesOnlyOutsideSingleQuotes() {
+        assertThat(Curl.parse("curl \\\n  http://a").url()).isEqualTo("http://a");
+        assertThat(Curl.parse("curl 'http://a/x\\\ny'").url()).isEqualTo("http://a/x\\\ny");
+    }
+
+    @Test
+    void aMethodTheShellWouldReadDifferentlyIsRefused() {
+        assertThatThrownBy(() -> Curl.parse("curl -X 'GET X' http://a")).isInstanceOf(IllegalArgumentException.class);
+        assertThat(Curl.parse("curl -X propfind http://a").method()).isEqualTo("PROPFIND");
+    }
 }

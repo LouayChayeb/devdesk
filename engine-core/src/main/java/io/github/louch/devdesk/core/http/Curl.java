@@ -6,9 +6,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /** Requests as curl commands: "Copy as curl" for a terminal or a bug report, and pasting one in to import it. */
 public final class Curl {
+
+    /**
+     * What -X accepts: real methods are letters (GET, PROPFIND). Nothing the shell would read differently, because
+     * "copy as curl" writes the method unquoted.
+     */
+    private static final Pattern METHOD = Pattern.compile("[A-Za-z0-9._-]+");
 
     private Curl() {}
 
@@ -18,7 +25,8 @@ public final class Curl {
         if (!call.method().equals("GET") || call.body() instanceof HttpCall.Body.Form) {
             b.append(" -X ").append(call.method());
         }
-        b.append(' ').append(quote(call.url()));
+        // A URL starting with "-" would read back as an option; --url says what it is.
+        b.append(call.url().startsWith("-") ? " --url " : " ").append(quote(call.url()));
         for (HttpCall.Header h : call.sentHeaders()) {
             if (call.body() instanceof HttpCall.Body.Form && h.name().equalsIgnoreCase("Content-Type")) {
                 continue; // --data-urlencode sets it
@@ -53,7 +61,7 @@ public final class Curl {
      * @throws IllegalArgumentException with what's wrong, when it isn't a curl command with a URL
      */
     public static HttpCall parse(String command) {
-        List<String> words = words(command.replace("\\\r\n", " ").replace("\\\n", " "));
+        List<String> words = words(command);
         if (words.isEmpty() || !words.getFirst().equals("curl")) {
             throw new IllegalArgumentException("that isn't a curl command (it should start with curl)");
         }
@@ -70,6 +78,9 @@ public final class Curl {
             String next = i + 1 < words.size() ? words.get(i + 1) : "";
             switch (w) {
                 case "-X", "--request" -> {
+                    if (!METHOD.matcher(next).matches()) {
+                        throw new IllegalArgumentException("\"" + next + "\" after " + w + " isn't an HTTP method");
+                    }
                     method = next.toUpperCase(Locale.ROOT);
                     i++;
                 }
@@ -177,6 +188,8 @@ public final class Curl {
             } else if (quote == '"') {
                 if (c == '"') {
                     quote = 0;
+                } else if (c == '\\' && line.startsWith("\n", i + 1)) {
+                    i++; // a continued line inside double quotes: sh drops both
                 } else if (c == '\\' && i + 1 < line.length() && "\"\\$`".indexOf(line.charAt(i + 1)) >= 0) {
                     w.append(line.charAt(++i));
                 } else {
@@ -189,6 +202,10 @@ public final class Curl {
                 quote = '\''; // bash's $'...': close enough for copied commands
                 inWord = true;
                 i++;
+            } else if (c == '\\' && line.startsWith("\n", i + 1)) {
+                i++; // backslash + line break outside quotes continues the command on the next line, as in sh
+            } else if (c == '\\' && line.startsWith("\r\n", i + 1)) {
+                i += 2; // the same, copied from Windows
             } else if (c == '\\' && i + 1 < line.length()) {
                 w.append(line.charAt(++i));
                 inWord = true;

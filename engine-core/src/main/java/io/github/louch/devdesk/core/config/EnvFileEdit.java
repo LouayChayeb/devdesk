@@ -15,14 +15,17 @@ public final class EnvFileEdit {
 
     private EnvFileEdit() {}
 
-    /** {@code key=value} replaces the first line that sets {@code key}, or is added at the end. */
+    /**
+     * {@code key=value} replaces the last line that sets {@code key}, or is added at the end. The last one, because
+     * that's the one readers use when a key is set twice: changing an earlier one would change nothing.
+     */
     public static String set(String content, String key, String value) {
         requireKey(key);
         List<String> lines = new ArrayList<>(content.lines().toList());
         String line = key + "=" + quote(value);
         boolean replaced = false;
-        for (int i = 0; i < lines.size(); i++) {
-            if (!replaced && sets(lines.get(i), key)) {
+        for (int i = lines.size() - 1; i >= 0 && !replaced; i--) {
+            if (sets(lines.get(i), key)) {
                 // Keep "export " if the line had it: some people source their .env from the shell.
                 lines.set(i, (lines.get(i).strip().startsWith("export ") ? "export " : "") + line);
                 replaced = true;
@@ -58,10 +61,11 @@ public final class EnvFileEdit {
 
     /** Quotes only when needed: spaces, # or quotes would change how .env readers see the value. */
     static String quote(String value) {
-        if (value.contains("\n")) {
+        if (value.contains("\n") || value.contains("\r")) {
             throw new IllegalArgumentException("a .env value can't contain a line break");
         }
-        return value.matches("[^\\s\"'#$\\\\]*")
+        // strip(): the reader trims more than ASCII spaces (e.g. U+2003, U+001F), so such ends need quotes too.
+        return value.matches("[^\\s\"'#$\\\\]*") && value.strip().equals(value)
                 ? value
                 : "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }

@@ -3,6 +3,7 @@
 plugins {
     id("devdesk.java-conventions")
     id("devdesk.mutation")
+    id("devdesk.fuzz")
     `java-library`
 }
 
