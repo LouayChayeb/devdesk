@@ -5,6 +5,10 @@
 // PIT's own command-line runner, started as a plain JavaExec task (the PIT Gradle plugin doesn't support this Gradle
 // version). Slow on purpose (thousands of test runs), so it isn't part of `build`: CI runs it in its own job.
 //
+// Resumable runs in parts (scripts/mutation-chunks.py): -PpitestTargetClasses=<globs> mutates only those classes,
+// -PpitestReportDir=<dir> writes the report there. (PIT's own "history" files would reuse earlier results, but open
+// source PIT no longer supports them: they need a commercial plugin.)
+//
 // A module can exclude tests with `extra["pitestExcludedTests"] = "pkg.SlowTest,pkg.Other*"`: tests that only drive
 // child JVMs (the real engine, the real CLI) can't kill a mutant in this JVM anyway, and take minutes each.
 plugins {
@@ -31,23 +35,30 @@ tasks.register<JavaExec>("pitest") {
     classpath = sourceSets["test"].runtimeClasspath + pitest
     val reportDir = layout.buildDirectory.dir("reports/pitest")
     outputs.dir(reportDir)
+    // The part to mutate comes from -P properties Gradle doesn't track: never skip a run as "up to date".
+    outputs.upToDateWhen { false }
     doFirst {
         val excluded = (project.findProperty("pitestExcludedTests") ?: extra.properties["pitestExcludedTests"] ?: "")
             .toString()
+        val targets = project.findProperty("pitestTargetClasses")?.toString() ?: "io.github.louch.devdesk.*"
+        val report = project.findProperty("pitestReportDir")?.toString() ?: reportDir.get().asFile.absolutePath
+        // Each thread is a separate test JVM; 4 of them with 768 MB fit next to Gradle on an 8 GB laptop.
+        val threads = project.findProperty("pitestThreads")?.toString()
+            ?: Runtime.getRuntime().availableProcessors().coerceAtMost(4).toString()
         args = listOfNotNull(
-            "--reportDir", reportDir.get().asFile.absolutePath,
-            "--targetClasses", "io.github.louch.devdesk.*",
+            "--reportDir", report,
+            "--targetClasses", targets,
             "--targetTests", "io.github.louch.devdesk.*",
             // Test helpers live in the same packages (fakes, scripted runtimes): only product code is mutated.
             "--excludedClasses", "*Test,*Test\$*,*.Fake*,*.Scripted*,*.TestEngine*,*.TestContainer*,*.TestPostgres*,*.TestMysql*",
             "--sourceDirs", sourceSets["main"].java.srcDirs.joinToString(",") { it.absolutePath },
-            "--threads", Runtime.getRuntime().availableProcessors().coerceAtMost(8).toString(),
+            "--threads", threads,
             // STRONGER = the defaults plus removed conditionals: harder mutants, fewer gaps hidden.
             "--mutators", "STRONGER",
             "--outputFormats", "XML,HTML",
             "--timestampedReports", "false",
             "--timeoutConst", "10000",
-            "--jvmArgs", "--enable-native-access=ALL-UNNAMED",
+            "--jvmArgs", "--enable-native-access=ALL-UNNAMED,-Xmx768m",
         ) + (if (excluded.isBlank()) emptyList() else listOf("--excludedTestClasses", excluded))
     }
 }
