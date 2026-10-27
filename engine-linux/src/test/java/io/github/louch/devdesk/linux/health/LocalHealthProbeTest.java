@@ -136,6 +136,34 @@ class LocalHealthProbeTest {
     }
 
     @Test
+    void httpNeverAsksForAnUpgradeThatDevServersLeaveUnanswered() throws Exception {
+        // Like Vite: a request carrying an Upgrade header goes to its websocket handler, which ignores it for good.
+        try (ServerSocket devServer = new ServerSocket(0)) {
+            Thread.ofVirtual().start(() -> {
+                while (!devServer.isClosed()) {
+                    try (java.net.Socket client = devServer.accept()) {
+                        var in = new java.io.BufferedReader(new java.io.InputStreamReader(client.getInputStream()));
+                        boolean upgrade = false;
+                        for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine()) {
+                            upgrade |= line.toLowerCase().startsWith("upgrade:");
+                        }
+                        if (upgrade) {
+                            Thread.sleep(2_000);
+                        } else {
+                            client.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".getBytes());
+                        }
+                    } catch (Exception e) {
+                        return;
+                    }
+                }
+            });
+            URI root = URI.create("http://127.0.0.1:" + devServer.getLocalPort() + "/");
+            assertThat(probe(new HealthCheckSpec.Http(root, 200, 299, FAST)))
+                    .isEqualTo(new ProbeResult.Passed("GET " + root + " → HTTP 200"));
+        }
+    }
+
+    @Test
     void aTimedOutCommandLeavesNoProcessBehind() throws Exception {
         java.nio.file.Path pidFile = java.nio.file.Files.createTempFile("health", ".pid");
         probe(new HealthCheckSpec.Command("sleep 30 & echo $! > " + pidFile + "; wait", FAST));

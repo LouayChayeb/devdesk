@@ -26,6 +26,7 @@ final class TestMysql implements AutoCloseable {
     /** {@code image} is "mysql:9.5" or "mariadb:11"; both read MYSQL_ROOT_PASSWORD and MYSQL_DATABASE. */
     static TestMysql start(String label, String image, String... setup) throws Exception {
         assumeTrue(run("docker", "info").isPresent(), "Docker is not available");
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         String name = "devdesk-test-" + label + "-" + ProcessHandle.current().pid();
         run(
                         "docker",
@@ -34,6 +35,8 @@ final class TestMysql implements AutoCloseable {
                         "--rm",
                         "--name",
                         name,
+                        "--label",
+                        TestJvm.LABEL + "=" + TestJvm.ID,
                         "-e",
                         "MYSQL_ROOT_PASSWORD=dev",
                         "-e",
@@ -72,7 +75,7 @@ final class TestMysql implements AutoCloseable {
 
     @Override
     public void close() {
-        run("docker", "rm", "-f", name);
+        run("docker", "rm", "-f", "-v", name);
     }
 
     private static Optional<String> run(String... command) {

@@ -712,17 +712,25 @@ public final class ConfigParser {
     }
 
     private Optional<String> interpolated(YamlNode node, String path) {
-        return text(node, path).flatMap(t -> {
-            StringBuilder missing = new StringBuilder();
-            Optional<String> value = Interpolation.resolve(t, env, missing);
-            if (value.isEmpty()) {
+        return text(node, path).flatMap(t -> switch (Interpolation.resolve(t, env)) {
+            case Interpolation.Result.Resolved r -> Optional.of(r.text());
+            case Interpolation.Result.Unset u
+            when !u.message().isEmpty() -> {
                 problem(
                         node.location(),
                         path,
-                        "variable ${" + missing + "} is not set. Set it, add it to an env_files "
-                                + "file, or give a default: ${" + missing + ":-value}");
+                        "variable ${" + u.variable() + "} is required and not set (\"" + u.message()
+                                + "\"). Set it or add it to an env_files file");
+                yield Optional.empty();
             }
-            return value;
+            case Interpolation.Result.Unset u -> {
+                problem(
+                        node.location(),
+                        path,
+                        "variable ${" + u.variable() + "} is not set. Set it, add it to an env_files "
+                                + "file, or give a default: ${" + u.variable() + ":-value}");
+                yield Optional.empty();
+            }
         });
     }
 

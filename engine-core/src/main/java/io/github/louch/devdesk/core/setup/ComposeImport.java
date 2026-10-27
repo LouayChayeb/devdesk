@@ -171,12 +171,30 @@ public final class ComposeImport {
                     .orElse("docker-compose.yml builds it from a Dockerfile in ./" + dir
                             + ", and DevDesk can't build images. Type the command that starts it on your machine."));
             app.ifPresent(a -> cardNotes.addAll(a.notes()));
-            for (String secret : secrets(s)) {
-                cardNotes.add("Compose gives it the secret \"" + secret + "\" at /run/secrets/" + secret + "; on your"
-                        + " machine it's the file " + secretFiles.getOrDefault(secret, "(not a file)")
-                        + ": point the setting that reads it there.");
-            }
             Map<String, String> pointed = pointAtHost(name, env, published, cardNotes);
+            for (String secret : secrets(s)) {
+                String file = secretFiles.get(secret);
+                // On this machine there's no /run/secrets: a setting that names it gets the file instead.
+                List<String> keys = file == null
+                        ? List.of()
+                        : pointed.entrySet().stream()
+                                .filter(e -> e.getValue().equals("/run/secrets/" + secret))
+                                .map(Map.Entry::getKey)
+                                .toList();
+                keys.forEach(k -> pointed.put(k, fromServiceDir(dir, file)));
+                cardNotes.add(
+                        keys.isEmpty()
+                                ? "Compose gives it the secret \"" + secret + "\" at /run/secrets/" + secret
+                                        + "; on your"
+                                        + " machine it's the file "
+                                        + Optional.ofNullable(file).orElse("(not a file)")
+                                        + ": point the setting that reads it there."
+                                : String.join(", ", keys) + " named the secret \"" + secret + "\" at /run/secrets/"
+                                        + secret
+                                        + ", which only exists inside compose's container; it now names the file "
+                                        + file
+                                        + " instead.");
+            }
             SetupDraft.Health health = app.flatMap(DetectedApp::healthUrl)
                     .map(SetupDraft.Health::http)
                     .orElse(
@@ -204,7 +222,6 @@ public final class ComposeImport {
             cardNotes.add("docker-compose.yml also builds this image. DevDesk can't build images: run "
                     + "\"docker compose build " + name + "\" once, then DevDesk uses the result.");
         }
-        warnAboutServiceNames(name, env, published.keySet(), cardNotes);
         Integer added = addedPorts.get(name);
         if (added != null) {
             ports = List.of(added + ":" + added);
@@ -337,6 +354,15 @@ public final class ComposeImport {
         return out;
     }
 
+    /** A path relative to the compose folder, as seen from a service's directory (where its command runs). */
+    static String fromServiceDir(String dir, String file) {
+        if (file.startsWith("/")) {
+            return file;
+        }
+        String clean = file.replaceFirst("^\\./", "");
+        return dir.isEmpty() ? "./" + clean : "../".repeat(dir.split("/").length) + clean;
+    }
+
     /** The secrets a service lists: "- db-password" or "- source: db-password". */
     private static List<String> secrets(YamlNode.Mapping s) {
         List<String> out = new ArrayList<>();
@@ -454,39 +480,12 @@ public final class ComposeImport {
         return out;
     }
 
-    private static void warnAboutServiceNames(
-            String self, Map<String, String> env, Set<String> services, List<String> cardNotes) {
-        for (var e : env.entrySet()) {
-            for (String other : services) {
-                if (!other.equals(self) && reachesByName(e.getKey(), e.getValue(), other)) {
-                    cardNotes.add(e.getKey() + " reaches \"" + other + "\" by its compose name. DevDesk's containers "
-                            + "don't share a network: use host.docker.internal and " + other + "'s published port.");
-                }
-            }
-        }
-    }
-
     /** Settings whose value is a host name: DB_HOST, REDIS_URL, KAFKA_BOOTSTRAP_SERVERS, API_ENDPOINT... */
     private static final Pattern HOST_SETTING =
             Pattern.compile("(?i).*(HOST|HOSTNAME|HOSTS|SERVER|SERVERS|ADDR|ADDRESS|URL|URI|DSN|ENDPOINT|BROKERS?)$");
 
     static boolean hostSetting(String key) {
         return HOST_SETTING.matcher(key).matches();
-    }
-
-    /**
-     * Does this value reach the compose service {@code other} by name? "db:5432", "postgres://u@db/x" and "http://db/"
-     * do; a bare "db" only for a host setting, since POSTGRES_DB: umami names a database, not the umami service.
-     */
-    static boolean reachesByName(String key, String value, String other) {
-        String name = Pattern.quote(other);
-        boolean inAddress = Pattern.compile("(?<![\\w.-])" + name + "(:\\d+|/)")
-                        .matcher(value)
-                        .find()
-                || Pattern.compile("(://|@)" + name + "(?![\\w.-])")
-                        .matcher(value)
-                        .find();
-        return inAddress || (value.strip().equals(other) && hostSetting(key));
     }
 
     private static String commandLine(YamlNode node) {

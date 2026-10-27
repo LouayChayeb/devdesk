@@ -23,6 +23,7 @@ public final class DiagnosisEngine {
                 new ProgramMissingRule(),
                 new KilledFromOutsideRule(),
                 new CrashRule(),
+                new WrapperCrashRule(),
                 new HealthRule(),
                 new MissingEnvRule(),
                 new MemoryGrowthRule(),

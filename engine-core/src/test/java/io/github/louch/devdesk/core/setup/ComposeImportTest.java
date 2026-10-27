@@ -157,15 +157,13 @@ class ComposeImportTest {
 
         assertThat(db.environment()).containsEntry("POSTGRES_USER", "umami").containsEntry("POSTGRES_DB", "umami");
         assertThat(db.notes()).noneMatch(n -> n.contains("compose name"));
-        // A real address still is one.
+        // A container reaching another by its compose name keeps it: they share the project's network.
         var app = umami.services().stream()
                 .filter(s -> s.name().equals("umami"))
                 .findFirst()
                 .orElseThrow();
-        assertThat(app.notes()).anyMatch(n -> n.startsWith("DATABASE_URL reaches \"db\""));
-        assertThat(ComposeImport.reachesByName("REDIS_HOST", "cache", "cache")).isTrue();
-        assertThat(ComposeImport.reachesByName("POSTGRES_USER", "cache", "cache"))
-                .isFalse();
+        assertThat(app.environment().get("DATABASE_URL")).contains("@db:5432");
+        assertThat(app.notes()).noneMatch(n -> n.contains("compose name"));
     }
 
     @Test
@@ -261,5 +259,37 @@ class ComposeImportTest {
 
         assertThat(db.volumes()).contains("./db/password.txt:/run/secrets/db-password:ro");
         assertThat(db.notes()).anyMatch(n -> n.contains("\"api-key\" isn't a file"));
+    }
+
+    @Test
+    void aSecretPathInTheEnvironmentPointsAtTheSecretsFileForACommand() {
+        // awesome-compose react-express-mysql: the backend, run on this machine, reads DATABASE_PASSWORD as a file.
+        var r = ComposeImport.read("""
+                services:
+                  backend:
+                    build: ./backend
+                    environment:
+                      - DATABASE_PASSWORD=/run/secrets/db-password
+                      - OTHER=/run/secrets/db-password-old
+                    secrets:
+                      - db-password
+                secrets:
+                  db-password:
+                    file: db/password.txt
+                """, "shop", "shop", dir -> Optional.empty());
+        var backend = r.services().getFirst();
+
+        assertThat(backend.environment())
+                .containsEntry("DATABASE_PASSWORD", "../db/password.txt")
+                .containsEntry("OTHER", "/run/secrets/db-password-old");
+        assertThat(backend.notes()).anyMatch(n -> n.contains("now names the file ./db/password.txt"));
+    }
+
+    @Test
+    void secretFilesAreSeenFromTheServicesDirectory() {
+        assertThat(ComposeImport.fromServiceDir("", "./db/password.txt")).isEqualTo("./db/password.txt");
+        assertThat(ComposeImport.fromServiceDir("backend", "./db/password.txt")).isEqualTo("../db/password.txt");
+        assertThat(ComposeImport.fromServiceDir("apps/api", "db/p.txt")).isEqualTo("../../db/p.txt");
+        assertThat(ComposeImport.fromServiceDir("backend", "/etc/p.txt")).isEqualTo("/etc/p.txt");
     }
 }

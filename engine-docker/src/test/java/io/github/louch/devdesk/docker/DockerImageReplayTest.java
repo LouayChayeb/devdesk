@@ -50,6 +50,7 @@ class DockerImageReplayTest {
     void connect() {
         var result = DockerConnection.connect(System.getenv());
         assumeTrue(result instanceof DockerConnection.Result.Connected, "Docker not available: " + result);
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         var runtime = ((DockerConnection.Result.Connected) result).runtime();
         docker = runtime.client();
         // A fresh machine (CI) may not have it yet: these tests create containers from it directly.
@@ -73,7 +74,10 @@ class DockerImageReplayTest {
             return;
         }
         if (bystander != null) {
-            docker.removeContainerCmd(bystander).withForce(true).exec();
+            docker.removeContainerCmd(bystander)
+                    .withForce(true)
+                    .withRemoveVolumes(true)
+                    .exec();
         }
         for (String t : List.of(tag + ":good", tag + ":bad")) {
             try {
@@ -225,7 +229,10 @@ class DockerImageReplayTest {
             }
             for (String id : ids) {
                 try {
-                    docker.removeContainerCmd(id).withForce(true).exec(); // this test's own containers
+                    docker.removeContainerCmd(id)
+                            .withForce(true)
+                            .withRemoveVolumes(true)
+                            .exec(); // this test's own containers
                 } catch (RuntimeException e) {
                     // already removed by the cleanup under test
                 }

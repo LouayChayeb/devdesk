@@ -37,6 +37,7 @@ class ProjectSupervisorTest {
     private final Set<String> unhealthy = ConcurrentHashMap.newKeySet();
 
     private final AtomicInteger dbProbes = new AtomicInteger();
+    private final List<String> tcpProbed = new CopyOnWriteArrayList<>();
     private final Map<Integer, Listener> busyPorts = new ConcurrentHashMap<>();
     private ProjectSupervisor supervisor;
 
@@ -49,7 +50,11 @@ class ProjectSupervisorTest {
                         runtime,
                         containers,
                         (check, dir, env) -> {
-                            // Health checks in these tests are "command" checks whose command is the service name.
+                            if (check instanceof io.github.louch.devdesk.core.project.HealthCheckSpec.Tcp t) {
+                                tcpProbed.add(t.host() + ":" + t.port());
+                                return new ProbeResult.Passed(t.host() + ":" + t.port() + " accepts connections");
+                            }
+                            // Other health checks in these tests are "command" checks named after their service.
                             String service =
                                     ((io.github.louch.devdesk.core.project.HealthCheckSpec.Command) check).command();
                             if (service.equals("db") && dbProbes.incrementAndGet() < 3) {
@@ -387,6 +392,31 @@ class ProjectSupervisorTest {
         s.down().get(10, TimeUnit.SECONDS);
         assertThat(runtime.stopped).containsExactly("api");
         assertThat(containers.stopped).containsExactly("db");
+    }
+
+    @Test
+    void aTcpCheckOnAPublishedPortConnectsToTheContainerItself() throws Exception {
+        // On the host, Docker's port forwarder accepts connections even when nothing listens inside: paperless's
+        // webserver looked healthy 0.1 s after start while it was failing to boot.
+        containers.insides.put(8000, new java.net.InetSocketAddress("172.18.0.5", 8000));
+        var s = supervisor("""
+                version: 1
+                services:
+                  web:
+                    container: { image: paperless, ports: ["8000:8000"] }
+                    health: { type: tcp, port: 8000, interval: 10ms }
+                  cache:
+                    container: { image: valkey, ports: ["6379:6379"] }
+                    health: { type: tcp, port: 6379, interval: 10ms }
+                """);
+
+        Map<String, ServiceState> states = s.up().get(10, TimeUnit.SECONDS);
+
+        assertThat(states.values()).allMatch(st -> st instanceof ServiceState.Healthy);
+        assertThat(tcpProbed).contains("172.18.0.5:8000").doesNotContain("127.0.0.1:8000");
+        // No inside address (e.g. Docker Desktop): the published port is all there is.
+        assertThat(tcpProbed).contains("127.0.0.1:6379");
+        s.down().get(10, TimeUnit.SECONDS);
     }
 
     @Test

@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -38,7 +37,7 @@ class DockerRuntimeEdgesTest {
 
     private static final String IMAGE = "alpine:3";
 
-    private final String tag = UUID.randomUUID().toString().substring(0, 8);
+    private final String tag = TestJvm.tag();
     private final Queue<OutputLine> lines = new ConcurrentLinkedQueue<>();
     /** Every container this test made, by name: removed at the end, and nothing else. */
     private final List<String> made = new ArrayList<>();
@@ -52,6 +51,7 @@ class DockerRuntimeEdgesTest {
     void connect() {
         var result = DockerConnection.connect(System.getenv());
         assumeTrue(result instanceof DockerConnection.Result.Connected, "Docker not available: " + result);
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         runtime = ((DockerConnection.Result.Connected) result).runtime();
         docker = runtime.client();
     }
@@ -61,7 +61,10 @@ class DockerRuntimeEdgesTest {
         if (runtime != null) {
             for (String name : made) {
                 try {
-                    docker.removeContainerCmd(name).withForce(true).exec();
+                    docker.removeContainerCmd(name)
+                            .withForce(true)
+                            .withRemoveVolumes(true)
+                            .exec();
                 } catch (DockerException e) {
                     // already removed by the test itself
                 }
@@ -224,6 +227,104 @@ class DockerRuntimeEdgesTest {
         assertThat(seen.volumes()).containsExactly(volume + ":/var/lib/data");
         assertThat(seen.composeFolder()).isEqualTo("/work/shop");
         assertThat(seen.devdesk()).isFalse();
+    }
+
+    @Test
+    void stoppingRemovesTheImagesHiddenVolumeButKeepsANamedOne() throws Exception {
+        // redis:7-alpine declares VOLUME /data, so Docker makes an anonymous volume on every start, like Postgres.
+        String named = "devdesk-test-" + tag + "-keep";
+        madeVolumes.add(named);
+        var p = project("a");
+        made.add(DockerContainerRuntime.containerName(p.name(), "cache"));
+        var spec = new ContainerLaunchSpec(
+                p.name(),
+                p.key(),
+                "cache",
+                new Workload.Container("redis:7-alpine", List.of(), List.of(named + ":/keep"), Optional.empty()),
+                Map.of());
+        var c = runtime.start(spec, lines::add);
+        String anonymous = docker.inspectContainerCmd(c.id()).exec().getMounts().stream()
+                .filter(m -> "/data".equals(m.getDestination().getPath()))
+                .findFirst()
+                .orElseThrow()
+                .getName();
+
+        runtime.stop(c, Duration.ofSeconds(5));
+
+        var left = docker.listVolumesCmd().exec().getVolumes().stream()
+                .map(v -> v.getName())
+                .toList();
+        assertThat(left).contains(named).doesNotContain(anonymous);
+    }
+
+    @Test
+    void aProjectsContainersReachEachOtherByServiceNameAndTheNetworkGoesWithTheLast() throws Exception {
+        var p = project("a");
+        var db = start(p, "db", "sleep 60");
+        var client = start(p, "client", "sh -c 'ping -c 1 -W 3 db && echo REACHED-DB'");
+
+        assertThat(runtime.onExit(client).get(30, TimeUnit.SECONDS).code()).isZero();
+        assertThat(lines).anyMatch(l -> l.text().contains("REACHED-DB"));
+        String network = ProjectNetwork.name(p.key());
+        assertThat(docker.inspectNetworkCmd().withNetworkId(network).exec().getLabels())
+                .containsEntry(DockerContainerRuntime.PROJECT_KEY_LABEL, p.key());
+
+        runtime.stop(client, Duration.ofSeconds(1));
+        assertThat(networkExists(network)).as("db still uses it").isTrue();
+        runtime.stop(db, Duration.ofSeconds(1));
+        assertThat(networkExists(network)).isFalse();
+    }
+
+    @Test
+    void aNetworkOfTheSameNameThatDevDeskDidntCreateIsNeverUsed() {
+        var p = project("a");
+        String network = ProjectNetwork.name(p.key());
+        docker.createNetworkCmd().withName(network).exec(); // someone else's, no labels
+        try {
+            var e = catchThrowableOfType(LaunchException.class, () -> start(p, "db", "sleep 60"));
+
+            assertThat(e).hasMessageContaining("wasn't created by DevDesk");
+            assertThat(networkExists(network)).as("left alone").isTrue();
+        } finally {
+            docker.removeNetworkCmd(network).exec();
+        }
+    }
+
+    @Test
+    void afterACrashTheLeftoverCleanupAlsoRemovesTheNetwork() throws Exception {
+        var p = project("a");
+        start(p, "db", "sleep 60");
+        // A new runtime knows nothing of the first one's containers: like the next DevDesk after a SIGKILL.
+        var next = new DockerContainerRuntime(docker);
+
+        next.leftovers().find(p).forEach(l -> next.leftovers().remove(l));
+
+        assertThat(networkExists(ProjectNetwork.name(p.key()))).isFalse();
+    }
+
+    private boolean networkExists(String name) {
+        try {
+            docker.inspectNetworkCmd().withNetworkId(name).exec();
+            return true;
+        } catch (com.github.dockerjava.api.exception.NotFoundException e) {
+            return false;
+        }
+    }
+
+    @Test
+    void whenAQuickCrashIsReportedItsLastOutputIsAlreadyThere() throws Exception {
+        // Like MySQL without a password setting: one error line, then exit 1, within a second of starting.
+        for (int i = 0; i < 5; i++) {
+            lines.clear();
+            var p = project("q" + i);
+            var c = start(p, "db", "sh -c 'echo You need to specify MYSQL_ROOT_PASSWORD >&2; exit 1'");
+
+            assertThat(runtime.onExit(c).get(30, TimeUnit.SECONDS).code()).isEqualTo(1);
+            assertThat(lines)
+                    .as("output known when the exit is")
+                    .anyMatch(l -> l.text().contains("MYSQL_ROOT_PASSWORD"));
+            runtime.stop(c, Duration.ofSeconds(1));
+        }
     }
 
     @Test

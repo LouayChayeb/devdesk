@@ -371,6 +371,20 @@ public final class ProjectSupervisor implements AutoCloseable {
         return CompletableFuture.supplyAsync(this::states, actor);
     }
 
+    /**
+     * What each service printed, how it exited and what its probes said, for a diagnosis asked for from outside (the
+     * app's "Why"). Copied on the actor, like every read of the services' state.
+     */
+    public CompletableFuture<Map<String, ServiceHistory>> histories() {
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    Map<String, ServiceHistory> history = new LinkedHashMap<>();
+                    services.forEach((name, s) -> history.put(name, historyOf(s, Set.of())));
+                    return history;
+                },
+                actor);
+    }
+
     @Override
     public void close() {
         actor.shutdownNow();
@@ -751,14 +765,30 @@ public final class ProjectSupervisor implements AutoCloseable {
         s.probeTask = actor.schedule(
                 () -> Thread.ofVirtual().name("probe-" + s.spec.name()).start(() -> {
                     CrashPoint.reach("health.probing");
-                    ProbeResult result =
-                            s.spec.health() instanceof HealthCheckSpec.Docker && current instanceof Handle.Container c
-                                    ? containers.health(c.container())
-                                    : probe.probe(s.spec.health(), s.spec.directory(), environment(s));
+                    ProbeResult result = s.spec.health() instanceof HealthCheckSpec.Docker
+                                    && current instanceof Handle.Container c
+                            ? containers.health(c.container())
+                            : probe.probe(checkFor(s.spec.health(), current), s.spec.directory(), environment(s));
                     onActor(() -> onProbeResult(s, current, result));
                 }),
                 delay.toMillis(),
                 TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * A tcp check on a container's published port goes to the container itself: on the host, Docker's port forwarder
+     * accepts the connection even when nothing listens inside, so that check always passed.
+     */
+    private HealthCheckSpec checkFor(HealthCheckSpec check, Handle current) {
+        if (check instanceof HealthCheckSpec.Tcp t
+                && current instanceof Handle.Container c
+                && (t.host().equals("127.0.0.1") || t.host().equals("localhost"))) {
+            return containers
+                    .inside(c.container(), t.port())
+                    .<HealthCheckSpec>map(a -> new HealthCheckSpec.Tcp(a.getHostString(), a.getPort(), t.timing()))
+                    .orElse(check);
+        }
+        return check;
     }
 
     private void onProbeResult(Service s, Handle probed, ProbeResult result) {

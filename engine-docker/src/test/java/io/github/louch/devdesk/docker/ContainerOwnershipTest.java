@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
-import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -33,7 +32,7 @@ import org.junit.jupiter.api.Test;
 @Tag("docker")
 class ContainerOwnershipTest {
 
-    private final String tag = UUID.randomUUID().toString().substring(0, 8);
+    private final String tag = TestJvm.tag();
     private DockerClient docker;
     private DockerContainerRuntime runtime;
     private final List<String> bystanders = new ArrayList<>();
@@ -44,6 +43,7 @@ class ContainerOwnershipTest {
     void connect() {
         var result = DockerConnection.connect(System.getenv());
         assumeTrue(result instanceof DockerConnection.Result.Connected, "Docker not available: " + result);
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         runtime = ((DockerConnection.Result.Connected) result).runtime();
         docker = runtime.client();
         // A fresh machine (CI) may not have it yet: these tests create containers from it directly.
@@ -71,7 +71,10 @@ class ContainerOwnershipTest {
         // The test's own bystanders, by the ids it got when creating them.
         for (String id : bystanders) {
             try {
-                docker.removeContainerCmd(id).withForce(true).exec();
+                docker.removeContainerCmd(id)
+                        .withForce(true)
+                        .withRemoveVolumes(true)
+                        .exec();
             } catch (RuntimeException e) {
                 // already gone: the assertions below would have failed first
             }

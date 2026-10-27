@@ -58,6 +58,7 @@ class ConfigErrorsTest {
             { command: x, environment: [A] }        | services.api.environment: expected KEY: value pairs, found a list
             { command: x, environment: { A: } }     | services.api.environment.A: expected a value, found empty
             { command: "${NOPE}" }                  | services.api.command: variable ${NOPE} is not set
+            { command: "${NOPE:?Variable not set}" } | services.api.command: variable ${NOPE} is required and not set ("Variable not set")
             { command: x, ports: [0] }              | services.api.ports: expected a whole number from 1 to 65535, found "0"
             { command: x, ports: [65536] }          | services.api.ports: expected a whole number from 1 to 65535, found "65536"
             { command: x, health: http }            | services.api.health: expected settings like type: http, found "http"

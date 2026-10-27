@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -34,7 +33,7 @@ class DockerContainerRuntimeTest {
 
     private static final String IMAGE = "alpine:3";
 
-    private final String project = "test-" + UUID.randomUUID().toString().substring(0, 8);
+    private final String project = "test-" + TestJvm.tag();
     private final Queue<OutputLine> lines = new ConcurrentLinkedQueue<>();
     private DockerClient docker;
     private DockerContainerRuntime runtime;
@@ -43,6 +42,7 @@ class DockerContainerRuntimeTest {
     void connect() {
         var result = DockerConnection.connect(System.getenv());
         assumeTrue(result instanceof DockerConnection.Result.Connected, "Docker not available: " + result);
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         runtime = ((DockerConnection.Result.Connected) result).runtime();
         docker = runtime.client();
     }
@@ -52,7 +52,10 @@ class DockerContainerRuntimeTest {
         if (runtime != null) {
             // Only this test's own containers (by label), never anything else on the machine.
             for (String name : runtime.ownContainerNames(project)) {
-                docker.removeContainerCmd(name).withForce(true).exec();
+                docker.removeContainerCmd(name)
+                        .withForce(true)
+                        .withRemoveVolumes(true)
+                        .exec();
             }
             docker.close();
         }
@@ -122,6 +125,38 @@ class DockerContainerRuntimeTest {
     }
 
     @Test
+    void aHealthCheckReachesTheContainerItselfNotDockersPortForwarder() throws Exception {
+        // Docker's forwarder accepts on the published port even when nothing listens inside (found on paperless).
+        int port;
+        try (ServerSocket s = new ServerSocket(0)) {
+            port = s.getLocalPort();
+        }
+        var c = runtime.start(
+                spec(
+                        "web",
+                        "sh -c 'sleep 4; nc -lk -p 80 -e echo ok'",
+                        List.of(new Workload.PortMapping("127.0.0.1", port, 80))),
+                lines::add);
+
+        var inside = runtime.inside(c, port);
+        assumeTrue(inside.isPresent(), "container addresses aren't reachable here (Docker Desktop or rootless)");
+        assertThat(inside.get().getPort()).isEqualTo(80);
+        assertThat(connects(inside.get())).isFalse(); // nothing listens yet: the honest answer
+        awaitTrue(() -> connects(inside.get()));
+        assertThat(runtime.inside(c, port + 1)).isEmpty(); // not one of its published ports
+        runtime.stop(c, Duration.ofSeconds(1));
+    }
+
+    private static boolean connects(java.net.InetSocketAddress address) {
+        try (Socket s = new Socket()) {
+            s.connect(address, 500);
+            return true;
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    @Test
     void ourLeftoverIsReplacedButSomeoneElsesContainerIsNeverTouched() throws Exception {
         var first = runtime.start(spec("api", "sleep 1000", List.of()), lines::add);
         // DevDesk "crashed" without stopping it: the next start replaces its own leftover.
@@ -141,7 +176,10 @@ class DockerContainerRuntimeTest {
                     .contains("docker rm -f " + foreign);
             assertThat(docker.inspectContainerCmd(foreign).exec().getName()).isEqualTo("/" + foreign);
         } finally {
-            docker.removeContainerCmd(foreign).withForce(true).exec();
+            docker.removeContainerCmd(foreign)
+                    .withForce(true)
+                    .withRemoveVolumes(true)
+                    .exec();
         }
     }
 

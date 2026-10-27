@@ -65,7 +65,7 @@ class MongoBrowserTest {
     @AfterAll
     static void stop() throws Exception {
         if (mongo != null) {
-            run("docker", "rm", "-f", NAME);
+            run("docker", "rm", "-f", "-v", NAME);
         }
     }
 

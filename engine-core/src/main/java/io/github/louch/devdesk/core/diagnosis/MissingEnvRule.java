@@ -38,13 +38,22 @@ public final class MissingEnvRule implements DiagnosisRule {
         if (content.isEmpty()) {
             return List.of();
         }
+        // Most frameworks (dotenv, Vite, Next.js, Laravel, Django-environ) load the .env next to .env.example
+        // themselves: a key set there is set, even if devdesk.yaml doesn't list the file.
+        String own = ctx.system().readFile(example.resolveSibling(".env")).orElse("");
+        List<String> ownKeys = new ArrayList<>();
+        Matcher o = KEY.matcher(own);
+        while (o.find()) {
+            ownKeys.add(o.group(1));
+        }
         List<String> missing = new ArrayList<>();
         Matcher m = KEY.matcher(content.get());
         while (m.find()) {
             String key = m.group(1);
             boolean set = spec.environment().containsKey(key)
                     || ctx.project().environment().containsKey(key)
-                    || ctx.environment().containsKey(key);
+                    || ctx.environment().containsKey(key)
+                    || ownKeys.contains(key);
             if (!set && !missing.contains(key)) {
                 missing.add(key);
             }

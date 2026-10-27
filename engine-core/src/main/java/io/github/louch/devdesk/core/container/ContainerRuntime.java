@@ -5,7 +5,9 @@ import io.github.louch.devdesk.core.process.ExitStatus;
 import io.github.louch.devdesk.core.process.LaunchException;
 import io.github.louch.devdesk.core.process.OutputLine;
 import io.github.louch.devdesk.core.process.StopResult;
+import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
@@ -34,4 +36,14 @@ public interface ContainerRuntime {
 
     /** The image's own HEALTHCHECK verdict, for {@code health: { type: docker }}. */
     ProbeResult health(RunningContainer container);
+
+    /**
+     * Where the container itself listens for {@code hostPort}, one of its published ports: its own address and the
+     * port inside. A check must connect there, not to the published port: Docker's port forwarder accepts a
+     * connection on the host even when nothing listens inside the container. Empty when the port isn't published by
+     * this container or its address can't be reached from here.
+     */
+    default Optional<InetSocketAddress> inside(RunningContainer container, int hostPort) {
+        return Optional.empty();
+    }
 }

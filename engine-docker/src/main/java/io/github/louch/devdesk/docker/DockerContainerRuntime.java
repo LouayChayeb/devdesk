@@ -31,8 +31,10 @@ import io.github.louch.devdesk.core.process.StreamKind;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.Workload;
 import io.github.louch.devdesk.core.setup.FolderScan;
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -59,8 +61,20 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     private final DockerClient docker;
     private final Map<String, CompletableFuture<ExitStatus>> exits = new ConcurrentHashMap<>();
 
+    /** Container ID → its project key, so removing the last container can remove the project's network too. */
+    private final Map<String, String> keys = new ConcurrentHashMap<>();
+
+    private final ProjectNetwork network;
+
+    /** Container ID → published host port → where the container itself listens. */
+    private final Map<String, Map<Integer, InetSocketAddress>> addresses = new ConcurrentHashMap<>();
+
+    /** Whether this machine reaches container addresses directly; null until Docker was asked. */
+    private volatile Boolean reachable;
+
     public DockerContainerRuntime(DockerClient docker) {
         this.docker = docker;
+        this.network = new ProjectNetwork(docker);
     }
 
     /** Database backups through the same Docker connection (dump tools run inside the database's container). */
@@ -94,10 +108,13 @@ public final class DockerContainerRuntime implements ContainerRuntime {
             throw new LaunchException("stopped before it was started", null); // a stop arrived while pulling
         }
 
+        String net = network.ensure(spec.project(), spec.projectKey());
         String id;
         try {
             var create = docker.createContainerCmd(c.image())
                     .withName(name)
+                    // Reachable from the project's other containers by its service name, as in compose.
+                    .withAliases(spec.service())
                     .withLabels(Map.of(
                             PROJECT_LABEL,
                             spec.project(),
@@ -112,11 +129,13 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                             .map(p -> ExposedPort.tcp(p.containerPort()))
                             .toList())
                     .withHostConfig(HostConfig.newHostConfig()
+                            .withNetworkMode(net)
                             .withPortBindings(portBindings(c))
                             .withBinds(c.volumes().stream().map(Bind::parse).toList()));
             // Only override the command when the user gave one; otherwise the image's own default runs.
             arguments(c).ifPresent(create::withCmd);
             id = create.exec().getId();
+            keys.put(id, spec.projectKey());
         } catch (DockerException e) {
             throw new LaunchException("Docker could not create " + name + ": " + clean(e), e);
         }
@@ -205,6 +224,64 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         return "healthy".equals(health.getStatus()) ? new ProbeResult.Passed(detail) : new ProbeResult.Failed(detail);
     }
 
+    @Override
+    public Optional<InetSocketAddress> inside(RunningContainer container, int hostPort) {
+        if (!containersReachable()) {
+            return Optional.empty();
+        }
+        // A container keeps its address and ports while it lives: ask Docker once, not on every probe.
+        Map<Integer, InetSocketAddress> known =
+                addresses.computeIfAbsent(container.id(), id -> new ConcurrentHashMap<>());
+        InetSocketAddress address = known.get(hostPort);
+        if (address == null) {
+            address = lookUpInside(container.id(), hostPort).orElse(null);
+            if (address != null) {
+                known.put(hostPort, address);
+            }
+        }
+        return Optional.ofNullable(address);
+    }
+
+    private Optional<InetSocketAddress> lookUpInside(String id, int hostPort) {
+        try {
+            var settings = docker.inspectContainerCmd(id).exec().getNetworkSettings();
+            Optional<String> ip = settings.getNetworks().values().stream()
+                    .map(n -> n.getIpAddress())
+                    .filter(a -> a != null && !a.isEmpty())
+                    .findFirst();
+            Optional<Integer> port = settings.getPorts().getBindings().entrySet().stream()
+                    .filter(e -> e.getValue() != null)
+                    .filter(e -> Arrays.stream(e.getValue())
+                            .anyMatch(b -> String.valueOf(hostPort).equals(b.getHostPortSpec())))
+                    .map(e -> e.getKey().getPort())
+                    .findFirst();
+            return ip.flatMap(a -> port.map(p -> new InetSocketAddress(a, p)));
+        } catch (DockerException e) {
+            return Optional.empty(); // gone or Docker busy: the probe uses the published port this time
+        }
+    }
+
+    /**
+     * Container addresses are reachable from the host with a rootful Docker on Linux. Docker Desktop runs containers
+     * in a VM and rootless Docker in its own network namespace: there, only published ports reach them.
+     */
+    private boolean containersReachable() {
+        Boolean known = reachable;
+        if (known == null) {
+            try {
+                var info = docker.infoCmd().exec();
+                String os = Optional.ofNullable(info.getOperatingSystem()).orElse("");
+                List<String> security =
+                        Optional.ofNullable(info.getSecurityOptions()).orElse(List.of());
+                known = !os.contains("Docker Desktop") && security.stream().noneMatch(o -> o.contains("rootless"));
+            } catch (DockerException e) {
+                return false; // ask again next time
+            }
+            reachable = known;
+        }
+        return known;
+    }
+
     // ---- helpers ----
 
     private void ensureImage(String image, Consumer<OutputLine> output) throws LaunchException {
@@ -277,7 +354,10 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                     null);
         }
         try {
-            docker.removeContainerCmd(existing.getId()).withForce(true).exec();
+            docker.removeContainerCmd(existing.getId())
+                    .withForce(true)
+                    .withRemoveVolumes(true) // anonymous volumes only, as in removeQuietly
+                    .exec();
         } catch (NotFoundException e) {
             // removed meanwhile (the cleanup after its previous run exited): fine
         }
@@ -334,11 +414,31 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     }
 
     private void removeQuietly(String id) {
+        addresses.remove(id);
+        String key = Optional.ofNullable(keys.remove(id)).orElseGet(() -> projectKeyOf(id));
+        removeContainer(id);
+        if (key != null) {
+            network.removeIfUnused(key);
+        }
+    }
+
+    private String projectKeyOf(String id) {
         try {
-            // Named volumes stay (they hold the database's data); only the container itself goes.
+            Map<String, String> labels =
+                    docker.inspectContainerCmd(id).exec().getConfig().getLabels();
+            return labels == null ? null : labels.get(PROJECT_KEY_LABEL);
+        } catch (NotFoundException e) {
+            return null;
+        }
+    }
+
+    private void removeContainer(String id) {
+        try {
+            // RemoveVolumes removes only the container's anonymous volumes (the ones an image's VOLUME line creates
+            // on every start: Postgres leaves ~200 MB each time). Named volumes hold the data and are never removed.
             docker.removeContainerCmd(id)
                     .withForce(true)
-                    .withRemoveVolumes(false)
+                    .withRemoveVolumes(true)
                     .exec();
         } catch (NotFoundException e) {
             // already gone

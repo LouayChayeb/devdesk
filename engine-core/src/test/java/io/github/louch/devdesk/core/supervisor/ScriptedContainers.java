@@ -9,9 +9,11 @@ import io.github.louch.devdesk.core.process.LaunchException;
 import io.github.louch.devdesk.core.process.OutputLine;
 import io.github.louch.devdesk.core.process.StopResult;
 import io.github.louch.devdesk.core.process.StreamKind;
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -26,6 +28,9 @@ final class ScriptedContainers implements ContainerRuntime {
     final List<String> started = new CopyOnWriteArrayList<>();
     final List<String> stopped = new CopyOnWriteArrayList<>();
     final Map<String, Map<String, String>> environments = new ConcurrentHashMap<>();
+    /** Published host port → where the container itself listens; ports not here have no inside address. */
+    final Map<Integer, InetSocketAddress> insides = new ConcurrentHashMap<>();
+
     private final Map<RunningContainer, CompletableFuture<ExitStatus>> exits = new ConcurrentHashMap<>();
 
     @Override
@@ -74,5 +79,10 @@ final class ScriptedContainers implements ContainerRuntime {
     @Override
     public ProbeResult health(RunningContainer c) {
         return new ProbeResult.Passed("Docker reports " + c.name() + " healthy");
+    }
+
+    @Override
+    public Optional<InetSocketAddress> inside(RunningContainer c, int hostPort) {
+        return Optional.ofNullable(insides.get(hostPort));
     }
 }

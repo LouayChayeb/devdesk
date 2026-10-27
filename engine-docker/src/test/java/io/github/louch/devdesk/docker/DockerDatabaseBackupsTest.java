@@ -11,7 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -22,7 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
 @Tag("docker")
 class DockerDatabaseBackupsTest {
 
-    private final String project = "bk" + UUID.randomUUID().toString().substring(0, 6);
+    private final String project = "bk" + TestJvm.tag();
     private final List<String> started = new ArrayList<>();
     private DockerDatabaseBackups backups;
 
@@ -33,12 +32,13 @@ class DockerDatabaseBackupsTest {
     void connect() {
         var result = DockerConnection.connect(System.getenv());
         assumeTrue(result instanceof DockerConnection.Result.Connected, "Docker not available: " + result);
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         backups = ((DockerConnection.Result.Connected) result).runtime().backups();
     }
 
     @AfterEach
     void remove() {
-        started.forEach(name -> sh("docker", "rm", "-f", name));
+        started.forEach(name -> sh("docker", "rm", "-f", "-v", name));
     }
 
     @Test
@@ -183,7 +183,8 @@ class DockerDatabaseBackupsTest {
 
     private String start(String service, String image, String... env) {
         String name = DockerContainerRuntime.containerName(project, service);
-        List<String> cmd = new ArrayList<>(List.of("docker", "run", "-d", "--rm", "--name", name));
+        List<String> cmd = new ArrayList<>(
+                List.of("docker", "run", "-d", "--rm", "--name", name, "--label", TestJvm.LABEL + "=" + TestJvm.ID));
         for (String e : env) {
             cmd.add("-e");
             cmd.add(e);

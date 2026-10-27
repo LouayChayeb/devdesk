@@ -26,6 +26,7 @@ final class TestPostgres implements AutoCloseable {
     /** Starts the container, waits until Postgres accepts connections, then runs {@code setupSql}. */
     static TestPostgres start(String label, String setupSql) throws Exception {
         assumeTrue(run("docker", "info").isPresent(), "Docker is not available");
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         String name = "devdesk-test-" + label + "-" + ProcessHandle.current().pid();
         run(
                         "docker",
@@ -34,6 +35,8 @@ final class TestPostgres implements AutoCloseable {
                         "--rm",
                         "--name",
                         name,
+                        "--label",
+                        TestJvm.LABEL + "=" + TestJvm.ID,
                         "-e",
                         "POSTGRES_PASSWORD=dev",
                         "-e",
@@ -70,7 +73,7 @@ final class TestPostgres implements AutoCloseable {
 
     @Override
     public void close() {
-        run("docker", "rm", "-f", name);
+        run("docker", "rm", "-f", "-v", name);
     }
 
     /** The command's output, or empty if it failed. */

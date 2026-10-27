@@ -42,8 +42,12 @@ jobs:
           echo "${{ matrix.module }}: $score"
           echo "**${{ matrix.module }}** mutation score (product code): $score" >> "$GITHUB_STEP_SUMMARY"
 
+      # The score is already in the job summary; the full report is a nice-to-have. Kept 1 day so nightly reports
+      # don't fill the artifact quota, and a full quota no longer turns the whole run red.
       - uses: actions/upload-artifact@v5
         if: always()
+        continue-on-error: true
         with:
           name: pitest-${{ matrix.module }}
           path: ${{ matrix.module }}/build/reports/pitest
+          retention-days: 1

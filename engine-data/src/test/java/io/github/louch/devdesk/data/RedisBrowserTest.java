@@ -76,7 +76,7 @@ class RedisBrowserTest {
 
     @AfterAll
     static void stopRedis() {
-        run("docker", "rm", "-f", NAME);
+        run("docker", "rm", "-f", "-v", NAME);
     }
 
     @Test

@@ -159,6 +159,71 @@ class RulesPreciseTest {
         assertThat(new HealthRule().evaluate(ctx(API), "api")).isEmpty();
     }
 
+    // ---- an app crashed under nodemon, which keeps running ----
+
+    @Test
+    void nodemonKeepsRunningButTheAppCrashedAndTheLinesBeforeSayWhy() throws Exception {
+        states.put("api", new ServiceState.Running(10, 0));
+        history.put(
+                "api",
+                history(
+                        List.of(
+                                out("[nodemon] starting `node src/index.js`"),
+                                err("Config validation error: \"JWT_SECRET\" is not allowed to be empty"),
+                                out("[nodemon] app crashed - waiting for file changes before starting...")),
+                        List.of(),
+                        List.of(),
+                        false,
+                        Set.of(10L)));
+
+        var f = new WrapperCrashRule().evaluate(ctx(API), "api");
+
+        assertThat(f).singleElement().satisfies(x -> {
+            assertThat(x.title()).isEqualTo("api's app crashed (nodemon keeps running)");
+            assertThat(x.evidence())
+                    .contains("stderr | Config validation error: \"JWT_SECRET\" is not allowed to be empty");
+        });
+    }
+
+    @Test
+    void nodemonWithATakenPortNamesThePortAndWhoHasIt() throws Exception {
+        states.put("api", new ServiceState.Running(10, 0));
+        history.put(
+                "api",
+                history(
+                        List.of(
+                                err("Error: listen EADDRINUSE: address already in use :::3000"),
+                                out("[nodemon] app crashed - waiting for file changes before starting...")),
+                        List.of(),
+                        List.of(),
+                        false,
+                        Set.of(10L)));
+        machine.listeners.put(3000, new Listener(3000, "0.0.0.0", 1000, Optional.of(4121L), Optional.empty()));
+
+        var f = new WrapperCrashRule().evaluate(ctx(API), "api").getFirst();
+
+        assertThat(f.title()).isEqualTo("Port 3000 is already in use");
+        assertThat(f.evidence()).anyMatch(e -> e.contains("PID 4121"));
+    }
+
+    @Test
+    void nodemonThatRestartedTheAppAfterTheCrashIsFine() throws Exception {
+        states.put("api", new ServiceState.Running(10, 0));
+        history.put(
+                "api",
+                history(
+                        List.of(
+                                out("[nodemon] app crashed - waiting for file changes before starting..."),
+                                out("[nodemon] restarting due to changes..."),
+                                out("[nodemon] starting `node src/index.js`")),
+                        List.of(),
+                        List.of(),
+                        false,
+                        Set.of(10L)));
+
+        assertThat(new WrapperCrashRule().evaluate(ctx(API), "api")).isEmpty();
+    }
+
     // ---- crash ----
 
     @Test
@@ -304,6 +369,18 @@ class RulesPreciseTest {
         assertThat(new MissingEnvRule().evaluate(ctx(yaml), "db"))
                 .as("containers: not checked")
                 .isEmpty();
+    }
+
+    @Test
+    void aDotEnvNextToTheExampleCountsBecauseTheAppLoadsItItself() throws Exception {
+        // node-express-boilerplate: dotenv reads .env, which devdesk.yaml doesn't list under env_files.
+        String yaml = "version: 1\nservices:\n  api: { command: node s.js, directory: api }\n";
+        machine.files.put(ROOT.resolve("api/.env.example"), "PORT=\nJWT_SECRET=\nSMTP_HOST=\n");
+        machine.files.put(ROOT.resolve("api/.env"), "PORT=3000\nexport JWT_SECRET=x\n");
+
+        var f = new MissingEnvRule().evaluate(ctx(yaml), "api");
+
+        assertThat(f).singleElement().satisfies(x -> assertThat(x.title()).isEqualTo("Setting SMTP_HOST is not set"));
     }
 
     @Test

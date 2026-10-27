@@ -6,7 +6,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
-HELPER = re.compile(r"(Test($|\$)|\.Fake|\.Scripted|\.TestEngine|\.TestContainer|\.TestPostgres|\.TestMysql)")
+HELPER = re.compile(r"(Test($|\$)|\.Fake|\.Scripted|\.TestEngine|\.TestContainer|\.TestPostgres|\.TestMysql|\.TestJvm)")
 CAUGHT = ("KILLED", "TIMED_OUT", "MEMORY_ERROR")
 
 caught = total = 0

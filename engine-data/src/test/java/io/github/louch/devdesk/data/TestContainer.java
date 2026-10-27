@@ -38,13 +38,15 @@ final class TestContainer implements AutoCloseable {
             String label, String image, int containerPort, int hostPort, IntPredicate ready, String... env)
             throws InterruptedException {
         assumeTrue(run("docker", "info").isPresent(), "Docker is not available");
+        TestJvm.reapOrphans(); // containers of test JVMs that were killed mid-test
         if (run("docker", "image", "inspect", image).isEmpty()) {
             // Pulled once (CI starts empty); a failed pull fails the test instead of silently skipping it.
             run("docker", "pull", "-q", image)
                     .orElseThrow(() -> new IllegalStateException("could not pull " + image + " (offline?)"));
         }
         String name = "devdesk-test-" + label + "-" + ProcessHandle.current().pid();
-        List<String> cmd = new ArrayList<>(List.of("docker", "run", "-d", "--rm", "--name", name));
+        List<String> cmd = new ArrayList<>(
+                List.of("docker", "run", "-d", "--rm", "--name", name, "--label", TestJvm.LABEL + "=" + TestJvm.ID));
         for (String e : env) {
             cmd.addAll(List.of("-e", e));
         }
@@ -59,7 +61,7 @@ final class TestContainer implements AutoCloseable {
         while (!ready.test(port)) {
             if (System.nanoTime() > deadline) {
                 String logs = run("docker", "logs", "--tail", "30", name).orElse("(no logs)");
-                run("docker", "rm", "-f", name);
+                run("docker", "rm", "-f", "-v", name);
                 throw new IllegalStateException(image + " wasn't ready after 90 s. Its last output:\n" + logs);
             }
             Thread.sleep(500);
@@ -78,7 +80,7 @@ final class TestContainer implements AutoCloseable {
 
     @Override
     public void close() {
-        run("docker", "rm", "-f", name);
+        run("docker", "rm", "-f", "-v", name);
     }
 
     private static Optional<String> run(String... command) {

@@ -30,8 +30,13 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class LocalHealthProbe implements HealthProbe {
 
     // Never follow redirects: a health URL that redirects elsewhere (e.g. to a login page) must not count as healthy.
-    private final HttpClient http =
-            HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
+    // HTTP/1.1 only: by default Java asks plain-http servers to upgrade to HTTP/2 ("Upgrade: h2c"). Dev servers with a
+    // websocket upgrade handler (Vite, webpack-dev-server) take that request and never answer it, so a working server
+    // looked unhealthy.
+    private final HttpClient http = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
     private final ProcessRuntime commands;
 
     /** {@code commands} runs command checks; it must stop the whole process group when a check times out. */

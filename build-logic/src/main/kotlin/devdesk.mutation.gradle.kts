@@ -37,6 +37,8 @@ tasks.register<JavaExec>("pitest") {
     outputs.dir(reportDir)
     // The part to mutate comes from -P properties Gradle doesn't track: never skip a run as "up to date".
     outputs.upToDateWhen { false }
+    // Test JVMs start through scripts/pit-minion-java.sh, each in its own process group (see that script for why).
+    environment("PIT_REAL_JAVA", javaLauncher.get().executablePath.asFile.absolutePath)
     doFirst {
         val excluded = (project.findProperty("pitestExcludedTests") ?: extra.properties["pitestExcludedTests"] ?: "")
             .toString()
@@ -50,7 +52,7 @@ tasks.register<JavaExec>("pitest") {
             "--targetClasses", targets,
             "--targetTests", "io.github.louch.devdesk.*",
             // Test helpers live in the same packages (fakes, scripted runtimes): only product code is mutated.
-            "--excludedClasses", "*Test,*Test\$*,*.Fake*,*.Scripted*,*.TestEngine*,*.TestContainer*,*.TestPostgres*,*.TestMysql*",
+            "--excludedClasses", "*Test,*Test\$*,*.Fake*,*.Scripted*,*.TestEngine*,*.TestContainer*,*.TestPostgres*,*.TestMysql*,*.TestJvm*",
             "--sourceDirs", sourceSets["main"].java.srcDirs.joinToString(",") { it.absolutePath },
             "--threads", threads,
             // STRONGER = the defaults plus removed conditionals: harder mutants, fewer gaps hidden.
@@ -59,6 +61,7 @@ tasks.register<JavaExec>("pitest") {
             "--timestampedReports", "false",
             "--timeoutConst", "10000",
             "--jvmArgs", "--enable-native-access=ALL-UNNAMED,-Xmx768m",
+            "--jvmPath", rootProject.file("scripts/pit-minion-java.sh").absolutePath,
         ) + (if (excluded.isBlank()) emptyList() else listOf("--excludedTestClasses", excluded))
     }
 }

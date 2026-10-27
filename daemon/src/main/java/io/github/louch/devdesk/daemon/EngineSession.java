@@ -20,6 +20,7 @@ import io.github.louch.devdesk.core.diagnosis.Finding;
 import io.github.louch.devdesk.core.diagnosis.Ghosts;
 import io.github.louch.devdesk.core.diagnosis.Introspection;
 import io.github.louch.devdesk.core.diagnosis.ProjectLinks;
+import io.github.louch.devdesk.core.diagnosis.ServiceHistory;
 import io.github.louch.devdesk.core.doctor.Doctor;
 import io.github.louch.devdesk.core.graph.DependencyCycleException;
 import io.github.louch.devdesk.core.graph.DependencyGraph;
@@ -882,14 +883,26 @@ final class EngineSession implements AutoCloseable {
     }
 
     /** Checks before starting, like `devdesk why`: runs nothing. */
-    synchronized Answer why() {
-        if (project.isEmpty()) {
-            return new Answer(404, ApiJson.error("no project is open"));
+    Answer why() {
+        ProjectLoader.Result.Loaded open;
+        Map<String, ServiceState> now;
+        Optional<ProjectSupervisor> running;
+        synchronized (this) {
+            if (project.isEmpty()) {
+                return new Answer(404, ApiJson.error("no project is open"));
+            }
+            open = project.get();
+            now = Map.copyOf(states);
+            running = supervisor;
         }
+        // While it runs, the supervisor's history is the evidence: without it every crash "printed nothing". Asked
+        // outside our lock: the supervisor's actor reports events to this session, which takes that lock.
+        Map<String, ServiceHistory> history =
+                running.map(s -> s.histories().join()).orElse(Map.of());
         var ctx = new DiagnosisContext(
-                project.get().project(),
-                Map.copyOf(states),
-                Map.of(),
+                open.project(),
+                now,
+                history,
                 engine.environment(),
                 engine.system(),
                 engine.clock().instant());
