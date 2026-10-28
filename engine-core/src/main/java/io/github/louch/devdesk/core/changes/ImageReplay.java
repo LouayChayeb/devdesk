@@ -20,6 +20,32 @@ public interface ImageReplay {
     /** Starts a replica of {@code container} on {@code image}, without volumes, on its own network and random ports. */
     Replica start(String image, Workload.Container container, Map<String, String> environment) throws LaunchException;
 
+    /**
+     * The same, with fresh, empty copies of the databases it needs started first on the replica's own network, each
+     * reachable by its service name (so {@code db:5432} works), without volumes or published ports. They're removed
+     * with the replica.
+     */
+    default Replica start(
+            String image, Workload.Container container, Map<String, String> environment, List<Helper> databases)
+            throws LaunchException {
+        if (!databases.isEmpty()) {
+            throw new LaunchException("this replay can't start copies of databases", null);
+        }
+        return start(image, container, environment);
+    }
+
+    /**
+     * A database the replica needs: a fresh copy of it is started next to the replica.
+     *
+     * @param service its name in the project: the copy answers to it on the replica's network
+     * @param environment what the real one gets (its user and password, so the app's settings match)
+     */
+    record Helper(String service, Workload.Container container, Map<String, String> environment) {
+        public Helper {
+            environment = Map.copyOf(environment);
+        }
+    }
+
     /** Is the replica's main process still running? */
     boolean running(Replica replica);
 

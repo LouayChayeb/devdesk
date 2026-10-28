@@ -11,7 +11,6 @@ import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
 import io.github.louch.devdesk.core.project.Workload;
 import io.github.louch.devdesk.core.state.ServiceState;
-import io.github.louch.devdesk.core.supervisor.ServiceEnvironment;
 import io.github.louch.devdesk.docker.DockerConnection;
 import io.github.louch.devdesk.linux.changes.GitLog;
 import io.github.louch.devdesk.linux.changes.KnownGoodFiles;
@@ -191,9 +190,8 @@ final class ChangeTracker {
         if (!(docker.get() instanceof DockerConnection.Result.Connected c)) {
             return new EngineSession.Answer(503, ApiJson.error("Docker isn't reachable, so nothing can be replayed"));
         }
-        var proof = new ImageProof(c.runtime().imageReplay(random), probe, clock, Duration.ofSeconds(1));
-        ImageProof.Result result = proof.prove(
-                service.get(), previous.get(), ServiceEnvironment.values(p, service.get(), environment), PROOF_CAP);
+        var proof = new ImageProof(c.runtime().imageReplay(random, p.key()), probe, clock, Duration.ofSeconds(1));
+        ImageProof.Result result = proof.prove(p, service.get(), previous.get(), environment, PROOF_CAP);
         proofs.put(proofKey(image, imageIds(List.of(image))), result);
         return new EngineSession.Answer(200, ApiJson.proof(service.get().name(), result));
     }

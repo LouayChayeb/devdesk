@@ -198,6 +198,7 @@ final class ApiJson {
     private static Map<String, Object> proofBody(ImageProof.Result r) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("outcome", r.outcome().name().toLowerCase());
+        m.put("kind", r.kind() == ImageProof.Kind.CRASH_CHECK ? "crash-check" : "health-check");
         m.put("summary", r.summary());
         m.put("evidence", r.evidence());
         m.put("caveat", r.caveat());

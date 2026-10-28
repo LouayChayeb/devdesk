@@ -170,6 +170,49 @@ class DockerImageReplayTest {
     }
 
     @Test
+    void eachCopyGetsItsOwnEmptyDatabaseReachableByNameAndNothingIsLeft() throws Exception {
+        // Both wait for "db:5432" first, as an app waits for its database; only the old one then serves.
+        String wait = "until nc -z db 5432; do sleep 0.2; done; ";
+        String good = build("good", (wait + SERVE).replace("\"", "\\\""));
+        build("bad", wait + "echo 'migration failed: relation users does not exist' >&2; exit 1");
+        var project = io.github.louch.devdesk.core.config.ConfigParser.parse(
+                """
+                version: 1
+                services:
+                  db:
+                    container: { image: "postgres:18", ports: ["15432:5432"] }
+                    environment: { POSTGRES_PASSWORD: test }
+                    health: { type: tcp, port: 15432 }
+                  api:
+                    container: { image: "%s:bad", ports: ["18080:8080"] }
+                    depends_on: { db: { condition: healthy } }
+                    health: { type: tcp, port: 18080 }
+                """.formatted(tag), dir, Map.of(), f -> Optional.empty());
+        var connected = (DockerConnection.Result.Connected) DockerConnection.connect(System.getenv());
+        var forProject = connected.runtime().imageReplay(new SecureRandom(), project.key());
+        var proof = new ImageProof(forProject, TCP, Clock.systemUTC(), Duration.ofMillis(500));
+
+        long started = System.nanoTime();
+        var result = proof.prove(project, project.services().get("api"), good, Map.of(), Duration.ofSeconds(30));
+        long millis = (System.nanoTime() - started) / 1_000_000;
+        System.out.println("prove-it with a database copy took " + millis + " ms");
+
+        assertThat(result.outcome())
+                .as(result.summary() + " " + result.evidence())
+                .isEqualTo(ImageProof.Outcome.PROVEN);
+        assertThat(result.kind()).isEqualTo(ImageProof.Kind.HEALTH_CHECK);
+        assertThat(result.caveat()).contains("fresh, empty copies of db");
+        assertThat(String.join(" ", result.evidence())).contains("migration failed");
+        // The copies, their databases and networks are all gone; nothing with this project's key is left.
+        assertThat(replay.leftoverProofs()).isEmpty();
+        assertThat(docker.listContainersCmd()
+                        .withShowAll(true)
+                        .withLabelFilter(Map.of(DockerContainerRuntime.PROJECT_KEY_LABEL, project.key()))
+                        .exec())
+                .isEmpty();
+    }
+
+    @Test
     void onlyReplicasWhoseDevDeskDiedAreRemoved() throws Exception {
         // A dead owner (a PID that doesn't exist), a live one (this test's own JVM), and no owner label at all.
         String dead = Long.MAX_VALUE / 2 + "@2020-01-01T00:00:00Z";

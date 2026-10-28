@@ -15,12 +15,15 @@ import io.github.louch.devdesk.core.health.ProbeResult;
 import io.github.louch.devdesk.core.process.LaunchException;
 import io.github.louch.devdesk.core.project.Workload;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.random.RandomGenerator;
 
 /**
@@ -37,10 +40,26 @@ public final class DockerImageReplay implements ImageReplay {
     private final RandomGenerator random;
     /** Replica id → its network id, to remove both. */
     private final Map<String, String> networks = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Replica id → the ids of its database copies, removed with it. */
+    private final Map<String, List<String>> databases = new java.util.concurrent.ConcurrentHashMap<>();
+    /** The project whose service is replayed: its key goes on everything, so Remove finds a leftover copy too. */
+    private final Optional<String> projectKey;
+    /** Whether this machine reaches containers by their own address (not Docker Desktop, not rootless). */
+    private final BooleanSupplier reachable;
+
+    /** How long a database copy may take to accept connections (MySQL's first start takes the longest). */
+    private static final Duration DATABASE_READY = Duration.ofSeconds(90);
 
     DockerImageReplay(DockerClient docker, RandomGenerator random) {
+        this(docker, random, Optional.empty(), () -> false);
+    }
+
+    DockerImageReplay(
+            DockerClient docker, RandomGenerator random, Optional<String> projectKey, BooleanSupplier reachable) {
         this.docker = docker;
         this.random = random;
+        this.projectKey = projectKey;
+        this.reachable = reachable;
     }
 
     @Override
@@ -56,8 +75,13 @@ public final class DockerImageReplay implements ImageReplay {
     /** Which DevDesk made a replica: its PID and start time, so a dead owner's replicas can be told apart. */
     static final String OWNER_LABEL = "devdesk.proof-owner";
 
-    private static Map<String, String> labels() {
-        return Map.of(PROOF_LABEL, "true", OWNER_LABEL, owner(ProcessHandle.current()));
+    private Map<String, String> labels() {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put(PROOF_LABEL, "true");
+        labels.put(OWNER_LABEL, owner(ProcessHandle.current()));
+        // No service label: a copy must never be taken for the real service by the leftover check.
+        projectKey.ifPresent(k -> labels.put(DockerContainerRuntime.PROJECT_KEY_LABEL, k));
+        return labels;
     }
 
     /** "<pid>@<start instant>": a PID alone could be reused by another program after the owner died. */
@@ -112,6 +136,12 @@ public final class DockerImageReplay implements ImageReplay {
 
     @Override
     public Replica start(String image, Workload.Container c, Map<String, String> environment) throws LaunchException {
+        return start(image, c, environment, List.of());
+    }
+
+    @Override
+    public Replica start(String image, Workload.Container c, Map<String, String> environment, List<Helper> helpers)
+            throws LaunchException {
         removeAbandoned(); // what a DevDesk killed mid-proof left
         byte[] bytes = new byte[4];
         random.nextBytes(bytes);
@@ -128,6 +158,24 @@ public final class DockerImageReplay implements ImageReplay {
         } catch (DockerException e) {
             throw new LaunchException(
                     "Docker could not create a network for the replay: " + DockerContainerRuntime.clean(e), e);
+        }
+        List<String> copies = new ArrayList<>();
+        try {
+            for (Helper h : helpers) {
+                copies.add(startDatabase(h, name, network));
+            }
+            for (int i = 0; i < helpers.size(); i++) {
+                waitUntilReady(helpers.get(i), copies.get(i), name);
+            }
+        } catch (DockerException | LaunchException e) {
+            copies.forEach(this::removeContainer);
+            removeNetwork(network);
+            throw e instanceof LaunchException l
+                    ? l
+                    : new LaunchException(
+                            "Docker could not start a copy of a database: "
+                                    + DockerContainerRuntime.clean((DockerException) e),
+                            e);
         }
         Ports ports = new Ports();
         // Port 0 on 127.0.0.1: Docker picks a free port, so a replica never collides with a real service.
@@ -149,6 +197,7 @@ public final class DockerImageReplay implements ImageReplay {
             DockerContainerRuntime.arguments(c).ifPresent(create::withCmd);
             id = create.exec().getId();
         } catch (DockerException | LaunchException e) {
+            copies.forEach(this::removeContainer);
             removeNetwork(network);
             throw new LaunchException(
                     "Docker could not create the replay of " + image + ": "
@@ -156,6 +205,7 @@ public final class DockerImageReplay implements ImageReplay {
                     e);
         }
         networks.put(id, network);
+        databases.put(id, copies);
         Replica replica = new Replica(id, name, Map.of());
         try {
             docker.startContainerCmd(id).exec();
@@ -165,6 +215,96 @@ public final class DockerImageReplay implements ImageReplay {
             remove(replica);
             throw new LaunchException(
                     "Docker could not start the replay of " + image + ": " + DockerContainerRuntime.clean(e), e);
+        }
+    }
+
+    /**
+     * A fresh, empty copy of a database on the replica's network, answering to the service's name ({@code db}), so
+     * the app's settings ({@code db:5432}) work unchanged. No volumes and no published ports: it is reachable only
+     * from the replica, and its data dies with it.
+     */
+    private String startDatabase(Helper h, String replica, String network) throws LaunchException {
+        var create = docker.createContainerCmd(h.container().image())
+                .withName(replica + "-" + h.service())
+                .withLabels(labels())
+                .withEnv(h.environment().entrySet().stream()
+                        .map(e -> e.getKey() + "=" + e.getValue())
+                        .toList())
+                // Docker's DNS on this network answers "db" with this container's address.
+                .withAliases(h.service())
+                .withHostConfig(HostConfig.newHostConfig().withNetworkMode(network));
+        DockerContainerRuntime.arguments(h.container()).ifPresent(create::withCmd);
+        String id = create.exec().getId();
+        docker.startContainerCmd(id).exec();
+        return id;
+    }
+
+    /**
+     * Waits until the copy accepts connections on its ports, at its own address on the replica's network, so the
+     * app doesn't fail only because its database was still starting. Where containers can't be reached by address
+     * (Docker Desktop), it can only wait a little and check the copy still runs.
+     */
+    private void waitUntilReady(Helper h, String id, String network) throws LaunchException {
+        List<Integer> ports = h.container().ports().stream()
+                .filter(p -> !p.udp())
+                .map(Workload.PortMapping::containerPort)
+                .toList();
+        long deadline = System.nanoTime() + DATABASE_READY.toNanos();
+        try {
+            if (ports.isEmpty() || !reachable.getAsBoolean()) {
+                Thread.sleep(3000);
+                if (!running(id)) {
+                    throw exited(h, id);
+                }
+                return;
+            }
+            String ip = docker.inspectContainerCmd(id)
+                    .exec()
+                    .getNetworkSettings()
+                    .getNetworks()
+                    .get(network)
+                    .getIpAddress();
+            while (System.nanoTime() < deadline) {
+                if (!running(id)) {
+                    throw exited(h, id);
+                }
+                if (ports.stream().allMatch(p -> accepts(ip, p))) {
+                    return;
+                }
+                Thread.sleep(250);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LaunchException("interrupted while its copy of " + h.service() + " was starting", e);
+        }
+        throw new LaunchException(
+                "its copy of " + h.service() + " didn't accept connections within " + DATABASE_READY.toSeconds() + " s",
+                null);
+    }
+
+    private LaunchException exited(Helper h, String id) {
+        return new LaunchException(
+                "its copy of " + h.service() + " (" + h.container().image() + ") exited: "
+                        + String.join(" | ", lastOutput(new Replica(id, id, Map.of()), 3)),
+                null);
+    }
+
+    /** A TCP connection to the copy's own address (the kernel's three-way handshake completes only if it listens). */
+    private static boolean accepts(String ip, int port) {
+        try (var socket = new java.net.Socket()) {
+            socket.connect(new java.net.InetSocketAddress(ip, port), 500);
+            return true;
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    private boolean running(String id) {
+        try {
+            return Boolean.TRUE.equals(
+                    docker.inspectContainerCmd(id).exec().getState().getRunning());
+        } catch (DockerException e) {
+            return false;
         }
     }
 
@@ -240,10 +380,22 @@ public final class DockerImageReplay implements ImageReplay {
 
     @Override
     public void remove(Replica r) {
+        List<String> copies = databases.remove(r.id());
+        if (copies != null) {
+            copies.forEach(this::removeContainer);
+        }
+        removeContainer(r.id());
+        String network = networks.remove(r.id());
+        if (network != null) {
+            removeNetwork(network);
+        }
+    }
+
+    private void removeContainer(String id) {
         try {
             // Force: SIGKILL is fine for a throwaway. Volumes(true) removes only the anonymous volumes the image
             // declared for this container (e.g. postgres' data folder), never named ones: none were mounted.
-            docker.removeContainerCmd(r.id())
+            docker.removeContainerCmd(id)
                     .withForce(true)
                     .withRemoveVolumes(true)
                     .exec();
@@ -251,10 +403,6 @@ public final class DockerImageReplay implements ImageReplay {
             // already gone
         } catch (DockerException e) {
             // reported by the leftover check (label devdesk.proof)
-        }
-        String network = networks.remove(r.id());
-        if (network != null) {
-            removeNetwork(network);
         }
     }
 

@@ -34,6 +34,11 @@ class ImageProofTest {
         final Set<String> dying = ConcurrentHashMap.newKeySet();
 
         final Set<String> probed = ConcurrentHashMap.newKeySet();
+        /** Images whose replica exits at once. */
+        final Set<String> exits = ConcurrentHashMap.newKeySet();
+        /** The database copies each replica was given. */
+        final List<List<String>> databases = new java.util.concurrent.CopyOnWriteArrayList<>();
+
         private final AtomicInteger next = new AtomicInteger(40000);
 
         @Override
@@ -51,8 +56,18 @@ class ImageProofTest {
         }
 
         @Override
+        public Replica start(String image, Workload.Container c, Map<String, String> env, List<Helper> helpers)
+                throws LaunchException {
+            databases.add(helpers.stream()
+                    .map(h -> h.service() + "=" + h.container().image() + " " + h.environment())
+                    .toList());
+            return start(image, c, env);
+        }
+
+        @Override
         public boolean running(Replica r) {
-            return !(dying.contains(imageOf.get(r.id())) && probed.contains(r.id()));
+            return !exits.contains(imageOf.get(r.id()))
+                    && !(dying.contains(imageOf.get(r.id())) && probed.contains(r.id()));
         }
 
         @Override
@@ -157,8 +172,9 @@ class ImageProofTest {
     }
 
     @Test
-    void aCommandHealthCheckIsNeverReplayedBecauseItWouldHitTheRealService() throws Exception {
+    void aCommandHealthCheckIsNeverRunAgainstACopyItBecomesACrashCheck() throws Exception {
         replay.present.add(OLD);
+        replay.exits.add(NEW);
         ServiceSpec withCommand = VerdictTest.service(
                 "db",
                 db.workload(),
@@ -167,8 +183,68 @@ class ImageProofTest {
 
         var r = proof.prove(withCommand, OLD, Map.of(), Duration.ofMillis(100));
 
-        assertThat(r.outcome()).isEqualTo(ImageProof.Outcome.CANNOT_REPLAY);
-        assertThat(replay.started).isEmpty();
+        // The command (it would talk to the real db) never ran: the probe here only knows tcp and would throw.
+        assertThat(r.outcome()).isEqualTo(ImageProof.Outcome.PROVEN);
+        assertThat(r.kind()).isEqualTo(ImageProof.Kind.CRASH_CHECK);
+        assertThat(r.summary()).startsWith("Proven by a crash check: the image db used before keeps running");
+        assertThat(r.caveat())
+                .startsWith("Crash check only (its health check is a command, which would talk to the" + " real db)");
+        assertThat(replay.removed).hasSize(2);
+    }
+
+    private static io.github.louch.devdesk.core.project.ProjectSpec project(String api) throws Exception {
+        return io.github.louch.devdesk.core.config.ConfigParser.parse(
+                """
+                version: 1
+                services:
+                  db:
+                    container: { image: "postgres:18", ports: ["5432:5432"] }
+                    environment: { POSTGRES_PASSWORD: secret }
+                    health: { type: tcp, port: 5432 }
+                  mail:
+                    command: mailpit
+                  api:
+                """ + api, java.nio.file.Path.of("/work/shop"), Map.of(), f -> java.util.Optional.empty());
+    }
+
+    @Test
+    void eachCopyGetsItsOwnFreshDatabasesAndKeepsItsHealthCheck() throws Exception {
+        replay.present.add(OLD);
+        replay.good.add(OLD);
+        var p = project("""
+                    container: { image: "postgres:latest", ports: ["5432:5432"] }
+                    depends_on: { db: { condition: healthy } }
+                    health: { type: tcp, port: 5432 }
+                """);
+
+        var r = proof.prove(p, p.services().get("api"), OLD, Map.of(), Duration.ofMillis(200));
+
+        assertThat(r.kind()).isEqualTo(ImageProof.Kind.HEALTH_CHECK);
+        assertThat(r.outcome()).isEqualTo(ImageProof.Outcome.PROVEN);
+        // Two copies, each with its own empty db, which gets the real db's settings (its password).
+        assertThat(replay.databases)
+                .hasSize(2)
+                .allSatisfy(d -> assertThat(d).containsExactly("db=postgres:18 {POSTGRES_PASSWORD=secret}"));
+        assertThat(r.caveat()).contains("with fresh, empty copies of db (no data)");
+    }
+
+    @Test
+    void aServiceThatNeedsMoreThanDatabasesIsJudgedByCrashesAndSaysSo() throws Exception {
+        replay.present.add(OLD);
+        var p = project("""
+                    container: { image: "postgres:latest", ports: ["5432:5432"] }
+                    depends_on: [db, mail]
+                    health: { type: tcp, port: 5432 }
+                """);
+
+        var r = proof.prove(p, p.services().get("api"), OLD, Map.of(), Duration.ofMillis(100));
+
+        assertThat(r.kind()).isEqualTo(ImageProof.Kind.CRASH_CHECK);
+        assertThat(r.outcome()).isEqualTo(ImageProof.Outcome.BOTH_PASS);
+        assertThat(r.summary()).contains("A crash check can't tell whether they work");
+        assertThat(r.caveat()).contains("it also needs mail, which a test copy can't have");
+        assertThat(replay.databases).allSatisfy(d -> assertThat(d).hasSize(1)); // db is still copied
+        assertThat(probedPorts).isEmpty();
     }
 
     @Test

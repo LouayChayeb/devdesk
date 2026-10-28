@@ -717,6 +717,14 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         return new DockerImageReplay(docker, random);
     }
 
+    /**
+     * Replicas of a service of {@code projectKey}: they and their database copies carry the project's key, so Remove
+     * and the leftover check find one a DevDesk killed mid-proof left behind.
+     */
+    public DockerImageReplay imageReplay(java.util.random.RandomGenerator random, String projectKey) {
+        return new DockerImageReplay(docker, random, Optional.of(projectKey), this::containersReachable);
+    }
+
     /** The underlying client, for this module's tests. */
     DockerClient client() {
         return docker;

@@ -3,9 +3,13 @@ package io.github.louch.devdesk.core.changes;
 import io.github.louch.devdesk.core.health.HealthProbe;
 import io.github.louch.devdesk.core.health.ProbeResult;
 import io.github.louch.devdesk.core.process.LaunchException;
+import io.github.louch.devdesk.core.project.Dependency;
 import io.github.louch.devdesk.core.project.HealthCheckSpec;
+import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
 import io.github.louch.devdesk.core.project.Workload;
+import io.github.louch.devdesk.core.setup.FolderScan;
+import io.github.louch.devdesk.core.supervisor.ServiceEnvironment;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -39,13 +43,28 @@ public final class ImageProof {
         CANNOT_REPLAY
     }
 
+    /** What a copy had to do to pass: said with every result, since the two prove different things. */
+    public enum Kind {
+        /** The service's own health check passed against the copy. */
+        HEALTH_CHECK,
+        /**
+         * Its health check couldn't be used (a command, or it needs services a copy can't have): a copy passes when it
+         * is still running at the end. Shows crashes, not "runs but doesn't work".
+         */
+        CRASH_CHECK
+    }
+
     /**
      * @param evidence one line per image: what its check said
      * @param caveat how faithful the replay was ("replayed without your volume data; 12s")
      */
-    public record Result(Outcome outcome, String summary, List<String> evidence, String caveat) {
+    public record Result(Outcome outcome, Kind kind, String summary, List<String> evidence, String caveat) {
         public Result {
             evidence = List.copyOf(evidence);
+        }
+
+        public Result(Outcome outcome, String summary, List<String> evidence, String caveat) {
+            this(outcome, Kind.HEALTH_CHECK, summary, evidence, caveat);
         }
 
         /** The suspect, re-judged with this replay. Only PROVEN raises it; BOTH_FAIL lowers it. */
@@ -76,11 +95,58 @@ public final class ImageProof {
     }
 
     /**
-     * Replays {@code service} on {@code previousImage} and on its current image, at most {@code cap} long.
+     * Replays {@code service} of {@code project}: each copy gets fresh, empty copies of the databases it depends on
+     * (same images, no data). When its health check can't be used against a copy (a command, or it needs services
+     * that aren't databases), the copies are judged by whether they keep running instead, and the result says so.
+     *
+     * @param shell the environment DevDesk was started with, as for the real services
+     */
+    public Result prove(
+            ProjectSpec project, ServiceSpec service, String previousImage, Map<String, String> shell, Duration cap)
+            throws InterruptedException {
+        List<ImageReplay.Helper> databases = new ArrayList<>();
+        List<String> others = new ArrayList<>();
+        for (Dependency d : service.dependsOn()) {
+            ServiceSpec dep = project.services().get(d.service());
+            if (dep != null && dep.workload() instanceof Workload.Container c && FolderScan.isDataStore(c.image())) {
+                databases.add(new ImageReplay.Helper(dep.name(), c, ServiceEnvironment.values(project, dep, shell)));
+            } else {
+                others.add(d.service());
+            }
+        }
+        Optional<String> crashCheck = crashCheckReason(service);
+        if (crashCheck.isEmpty() && !others.isEmpty()) {
+            crashCheck = Optional.of("it also needs " + String.join(", ", others)
+                    + ", which a test copy can't have, so its health check would fail either way");
+        }
+        return run(
+                service, previousImage, ServiceEnvironment.values(project, service, shell), databases, crashCheck, cap);
+    }
+
+    /**
+     * Replays {@code service} on {@code previousImage} and on its current image, at most {@code cap} long, with no
+     * other service.
      *
      * @param environment exactly what the real container gets
      */
     public Result prove(ServiceSpec service, String previousImage, Map<String, String> environment, Duration cap)
+            throws InterruptedException {
+        return run(service, previousImage, environment, List.of(), crashCheckReason(service), cap);
+    }
+
+    private static Optional<String> crashCheckReason(ServiceSpec service) {
+        return service.health() instanceof HealthCheckSpec.Command
+                ? Optional.of("its health check is a command, which would talk to the real " + service.name())
+                : Optional.empty();
+    }
+
+    private Result run(
+            ServiceSpec service,
+            String previousImage,
+            Map<String, String> environment,
+            List<ImageReplay.Helper> databases,
+            Optional<String> crashCheck,
+            Duration cap)
             throws InterruptedException {
         if (!(service.workload() instanceof Workload.Container container)) {
             return cannot(service.name() + " isn't a container: only image changes can be replayed.");
@@ -90,18 +156,18 @@ public final class ImageProof {
                     + ") is no longer on this machine (docker image prune removes old images), so it can't be"
                     + " replayed.");
         }
-        if (service.health() instanceof HealthCheckSpec.Command) {
-            return cannot(service.name() + "'s health check is a command, which would talk to the real "
-                    + service.name() + ". Replays only use tcp, http, docker or process checks.");
-        }
+        // A crash check: "still running at the end" passes, like a service with no health check.
+        HealthCheckSpec check = crashCheck.isPresent()
+                ? new HealthCheckSpec.ProcessAlive(service.health().timing())
+                : service.health();
+        Kind kind = crashCheck.isPresent() ? Kind.CRASH_CHECK : Kind.HEALTH_CHECK;
         Instant started = clock.instant();
-        Instant deadline = started.plus(cap);
         // Both at once: the whole proof takes one time cap, not two.
         var old = CompletableFuture.supplyAsync(
-                () -> trial(previousImage, container, service.health(), environment, deadline),
+                () -> trial(previousImage, container, check, environment, databases, cap),
                 r -> Thread.ofVirtual().name("prove-old").start(r));
         var now = CompletableFuture.supplyAsync(
-                () -> trial(container.image(), container, service.health(), environment, deadline),
+                () -> trial(container.image(), container, check, environment, databases, cap),
                 r -> Thread.ofVirtual().name("prove-new").start(r));
         Trial a;
         Trial b;
@@ -112,12 +178,28 @@ public final class ImageProof {
             return cannot("The replay itself failed: " + e.getCause());
         }
         long seconds = Math.max(1, Duration.between(started, clock.instant()).toSeconds());
-        String caveat = "Replayed without your volume data, on its own network, without the other services, on"
-                + " random ports; " + seconds + "s.";
+        String with = databases.isEmpty()
+                ? "without the other services"
+                : "with fresh, empty copies of "
+                        + String.join(
+                                ", ",
+                                databases.stream()
+                                        .map(ImageReplay.Helper::service)
+                                        .toList())
+                        + " (no data)";
+        String caveat = (kind == Kind.CRASH_CHECK
+                        ? "Crash check only (" + crashCheck.get() + "): a copy passed if it was still running at the"
+                                + " end. "
+                        : "Its own health check. ")
+                + "Replayed without your volume data, on its own network, " + with + ", on random ports; " + seconds
+                + "s.";
         List<String> evidence = List.of(
                 "before (" + shortId(previousImage) + "): " + a.detail(),
                 "now (" + container.image() + "): " + b.detail());
         String name = service.name();
+        if (kind == Kind.CRASH_CHECK) {
+            return crashVerdict(a, b, name, container.image(), evidence, caveat);
+        }
         if (a.passed() && !b.passed()) {
             return new Result(
                     Outcome.PROVEN,
@@ -150,21 +232,49 @@ public final class ImageProof {
                 caveat);
     }
 
+    /** The verdict of a crash check, worded so nobody reads more into it than "it stays up" or "it exits". */
+    private static Result crashVerdict(
+            Trial a, Trial b, String name, String image, List<String> evidence, String caveat) {
+        Outcome outcome;
+        String summary;
+        if (a.passed() && !b.passed()) {
+            outcome = Outcome.PROVEN;
+            summary = "Proven by a crash check: the image " + name + " used before keeps running, the current " + image
+                    + " exits.";
+        } else if (a.passed()) {
+            outcome = Outcome.BOTH_PASS;
+            summary = "Both images keep running in a test copy. A crash check can't tell whether they work, only that"
+                    + " neither crashes on its own.";
+        } else if (!b.passed()) {
+            outcome = Outcome.BOTH_FAIL;
+            summary = "Both images exit in a test copy: probably not the image change, or they need something the"
+                    + " copy leaves out (data, other services).";
+        } else {
+            outcome = Outcome.ODD;
+            summary = "The previous image exits and the current one keeps running in a test copy: the replay doesn't"
+                    + " explain your failure.";
+        }
+        return new Result(outcome, Kind.CRASH_CHECK, summary, evidence, caveat);
+    }
+
     private record Trial(boolean passed, String detail) {}
 
-    /** One replica: start, probe until it passes or the deadline, always remove. */
+    /** One replica: start, probe until it passes or {@code cap} has passed, always remove. */
     private Trial trial(
             String image,
             Workload.Container container,
             HealthCheckSpec check,
             Map<String, String> environment,
-            Instant deadline) {
+            List<ImageReplay.Helper> databases,
+            Duration cap) {
         ImageReplay.Replica r;
         try {
-            r = replay.start(image, container, environment);
+            r = replay.start(image, container, environment, databases);
         } catch (LaunchException e) {
             return new Trial(false, "could not start: " + e.getMessage());
         }
+        // The time starts once its databases are ready: a slow database's first start isn't the app's fault.
+        Instant deadline = clock.instant().plus(cap);
         try {
             // An image that exits at once has no published ports: "it exited" is the real answer, so check that first.
             if (!replay.running(r)) {

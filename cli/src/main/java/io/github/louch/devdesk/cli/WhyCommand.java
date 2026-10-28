@@ -12,7 +12,6 @@ import io.github.louch.devdesk.core.history.HistoryEntry;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
 import io.github.louch.devdesk.core.project.Workload;
-import io.github.louch.devdesk.core.supervisor.ServiceEnvironment;
 import io.github.louch.devdesk.docker.DockerConnection;
 import io.github.louch.devdesk.linux.changes.GitLog;
 import io.github.louch.devdesk.linux.changes.KnownGoodFiles;
@@ -184,8 +183,9 @@ final class WhyCommand implements Callable<Integer> {
             return Optional.empty();
         }
         try {
-            return Optional.of(new ImageProof(c.runtime().imageReplay(random), probe, clock, Duration.ofSeconds(1))
-                    .prove(svc.get(), previous.get(), ServiceEnvironment.values(project, svc.get(), env), PROOF_CAP));
+            return Optional.of(
+                    new ImageProof(c.runtime().imageReplay(random, project.key()), probe, clock, Duration.ofSeconds(1))
+                            .prove(project, svc.get(), previous.get(), env, PROOF_CAP));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Optional.empty();
