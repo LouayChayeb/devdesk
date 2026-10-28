@@ -87,12 +87,13 @@ class LinuxIntrospectionTest {
         assertThat(system.process(gone.pid())).isEmpty();
         assertThat(system.process(Long.MAX_VALUE)).isEmpty();
 
-        // `true` exits at once; its parent becomes `sleep`, which never collects it: a zombie until sleep ends.
-        Process parent = new ProcessBuilder("sh", "-c", "true & echo $!; exec sleep 120").start();
+        // The child exits after its parent became `sleep` (exec), which never collects it: a zombie until sleep ends.
+        // (A child exiting at once could be collected by sh itself before the exec: CI saw that, and no zombie.)
+        Process parent = new ProcessBuilder("sh", "-c", "sleep 0.3 & echo $!; exec sleep 120").start();
         try {
             long zombie = Long.parseLong(
                     new java.io.BufferedReader(new java.io.InputStreamReader(parent.getInputStream())).readLine());
-            long deadline = System.nanoTime() + 2_000_000_000L;
+            long deadline = System.nanoTime() + 5_000_000_000L;
             while (!io.github.louch.devdesk.linux.process.ProcStat.read(zombie)
                             .map(io.github.louch.devdesk.linux.process.ProcStat::isZombie)
                             .orElse(false)

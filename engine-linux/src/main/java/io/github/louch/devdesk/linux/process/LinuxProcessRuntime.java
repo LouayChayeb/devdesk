@@ -48,6 +48,8 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
     private final Optional<GroupLeftovers> records;
 
     private final Map<RunningProcess, Tracked> tracked = new ConcurrentHashMap<>();
+    /** Each scope's processes as last seen (PID → start time), to count one until it has really exited. */
+    private final Map<RunningProcess, Map<Long, Long>> seenInScope = new ConcurrentHashMap<>();
 
     /** Where a process family lives, which decides how we find and signal its members. */
     private sealed interface Ownership {
@@ -199,7 +201,7 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
     @Override
     public Set<Long> members(RunningProcess process) {
         return switch (find(process).ownership()) {
-            case Ownership.Scope scope -> cgroupMembers(scope.cgroupDir());
+            case Ownership.Scope scope -> scopeMembers(process, scope.cgroupDir());
             case Ownership.Group group -> forgetIfEmpty(find(process).owner(), group);
             case Ownership.Nothing nothing -> Set.of();
         };
@@ -307,6 +309,32 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * The scope's processes, plus any seen in it before that is still alive. The kernel takes an exiting process out of
+     * its cgroup (cgroup_exit) before it becomes a zombie (exit_notify), so for a moment cgroup.procs is empty while
+     * the process still runs its exit; CI caught "stopped" with a PID still alive. A PID only counts while its start
+     * time matches, so a reused PID is never taken for ours.
+     */
+    private Set<Long> scopeMembers(RunningProcess process, Path cgroupDir) {
+        Set<Long> now = cgroupMembers(cgroupDir);
+        Map<Long, Long> seen = seenInScope.computeIfAbsent(process, p -> new ConcurrentHashMap<>());
+        now.forEach(pid -> ProcStat.read(pid).ifPresent(s -> seen.put(pid, s.startTime())));
+        Set<Long> all = new java.util.HashSet<>(now);
+        seen.entrySet().removeIf(e -> {
+            boolean alive = ProcStat.read(e.getKey())
+                    .filter(s -> s.startTime() == e.getValue() && !s.isZombie())
+                    .isPresent();
+            if (alive) {
+                all.add(e.getKey());
+            }
+            return !alive;
+        });
+        if (all.isEmpty()) {
+            seenInScope.remove(process);
+        }
+        return Set.copyOf(all);
     }
 
     private static Set<Long> cgroupMembers(Path cgroupDir) {

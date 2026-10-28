@@ -58,7 +58,7 @@ public final class DockerImageReplay implements ImageReplay {
     private static final Duration DATABASE_READY = Duration.ofSeconds(90);
 
     DockerImageReplay(DockerClient docker, RandomGenerator random) {
-        this(docker, random, Optional.empty(), () -> false, image -> {});
+        this(docker, random, Optional.empty(), () -> false, image -> pull(docker, image));
     }
 
     DockerImageReplay(
@@ -227,6 +227,24 @@ public final class DockerImageReplay implements ImageReplay {
             remove(replica);
             throw new LaunchException(
                     "Docker could not start the replay of " + image + ": " + DockerContainerRuntime.clean(e), e);
+        }
+    }
+
+    /** Downloads {@code image} when it isn't here (without recording it: no project to record it for). */
+    private static void pull(DockerClient docker, String image) throws LaunchException {
+        try {
+            docker.inspectImageCmd(image).exec();
+        } catch (NotFoundException missing) {
+            try {
+                docker.pullImageCmd(image)
+                        .exec(new com.github.dockerjava.api.command.PullImageResultCallback())
+                        .awaitCompletion();
+            } catch (DockerException e) {
+                throw new LaunchException("could not download " + image + ": " + DockerContainerRuntime.clean(e), e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new LaunchException("stopped while downloading " + image, e);
+            }
         }
     }
 

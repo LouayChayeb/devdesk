@@ -214,22 +214,44 @@ class DockerImageReplayTest {
     }
 
     @Test
-    void aDatabaseImageIsMadeSureOfBeforeItsCopyStarts() throws Exception {
-        // CI's fresh machine had no postgres:18, and both copies failed with "No such image".
-        List<String> fetched = new java.util.concurrent.CopyOnWriteArrayList<>();
-        var replay =
-                new DockerImageReplay(docker, new SecureRandom(), Optional.of("shop-test"), () -> true, fetched::add);
+    void aMissingDatabaseImageIsDownloadedAndRecordedBeforeItsCopyStarts() throws Exception {
+        // CI's fresh machine had no postgres:18, and both copies failed with "No such image". An image this
+        // machine doesn't have plays that part; it is removed afterwards only if this test downloaded it.
+        String image = "postgres:17-alpine";
+        boolean wasHere = has(image);
+        // A throwaway state folder: the download is recorded there, not in the real pulls.txt.
+        Map<String, String> env = new java.util.HashMap<>(System.getenv());
+        env.put("XDG_STATE_HOME", dir.resolve("state").toString());
+        var connected = (DockerConnection.Result.Connected) DockerConnection.connect(env);
+        var replay = connected.runtime().imageReplay(new SecureRandom(), "shop-test"); // DevDesk's own path
         var db = new ImageReplay.Helper(
                 "db",
-                new Workload.Container("postgres:18", List.of(), List.of(), Optional.empty()),
+                new Workload.Container(image, List.of(), List.of(), Optional.empty()),
                 Map.of("POSTGRES_PASSWORD", "test"));
         var app = new Workload.Container("alpine:3", List.of(), List.of(), Optional.of("sleep 30"));
+        try {
+            var r = replay.start("alpine:3", app, Map.of(), List.of(db));
+            replay.remove(r);
 
-        var r = replay.start("alpine:3", app, Map.of(), List.of(db));
-        replay.remove(r);
+            assertThat(has(image)).isTrue();
+            assertThat(replay.leftoverProofs()).isEmpty();
+            if (!wasHere) {
+                assertThat(Files.readString(PullLog.defaultFile(env))).contains(image + "\tshop-test");
+            }
+        } finally {
+            if (!wasHere && has(image)) {
+                docker.removeImageCmd(image).exec();
+            }
+        }
+    }
 
-        assertThat(fetched).containsExactly("postgres:18");
-        assertThat(replay.leftoverProofs()).isEmpty();
+    private boolean has(String image) {
+        try {
+            docker.inspectImageCmd(image).exec();
+            return true;
+        } catch (com.github.dockerjava.api.exception.NotFoundException e) {
+            return false;
+        }
     }
 
     @Test
