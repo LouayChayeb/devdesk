@@ -3,7 +3,11 @@
 plugins {
     id("devdesk.java-conventions")
     application // adds ./gradlew :cli:run and packages a start script
+    id("devdesk.aot") // faster starts: see build-logic/src/main/kotlin/devdesk.aot.gradle.kts
 }
+
+// The AOT training run: a project check, which loads what most commands use (the parser, the diagnosis rules).
+extra["aotTraining"] = listOf("why", "-f", rootProject.file("examples/three-tier/devdesk.yaml").path)
 
 dependencies {
     implementation(project(":engine-core"))

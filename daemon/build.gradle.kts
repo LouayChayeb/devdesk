@@ -5,7 +5,11 @@ plugins {
     id("devdesk.java-conventions")
     id("devdesk.mutation")
     application // adds ./gradlew :daemon:run and packages a start script
+    id("devdesk.aot") // faster starts: see build-logic/src/main/kotlin/devdesk.aot.gradle.kts
 }
+
+// The AOT training run: the engine starts, sees its stdin closed (as when the app quits) and stops.
+extra["aotTraining"] = listOf<String>()
 
 dependencies {
     implementation(project(":engine-core"))
