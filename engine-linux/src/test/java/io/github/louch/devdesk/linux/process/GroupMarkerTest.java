@@ -62,9 +62,12 @@ class GroupMarkerTest {
                 assertThat(files.filter(f -> f.toString().endsWith(".group")).count())
                         .isEqualTo(1);
             }
+            // Members first, then the record: sh may fork its child between the two looks, and what already ran must
+            // be found (a child in the middle of exec too, whose environment the kernel briefly shows as empty).
+            var members = runtime.members(p);
             assertThat(records.find(project))
                     .singleElement()
-                    .satisfies(l -> assertThat(l.pids()).containsAll(runtime.members(p)));
+                    .satisfies(l -> assertThat(l.pids()).containsAll(members));
         } finally {
             new GracefulStop(runtime).stop(p, Duration.ofSeconds(2));
         }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.BuildImageResultCallback;
 import io.github.louch.devdesk.core.changes.ImageProof;
+import io.github.louch.devdesk.core.changes.ImageReplay;
 import io.github.louch.devdesk.core.health.HealthProbe;
 import io.github.louch.devdesk.core.health.ProbeResult;
 import io.github.louch.devdesk.core.project.HealthCheckSpec;
@@ -210,6 +211,25 @@ class DockerImageReplayTest {
                         .withLabelFilter(Map.of(DockerContainerRuntime.PROJECT_KEY_LABEL, project.key()))
                         .exec())
                 .isEmpty();
+    }
+
+    @Test
+    void aDatabaseImageIsMadeSureOfBeforeItsCopyStarts() throws Exception {
+        // CI's fresh machine had no postgres:18, and both copies failed with "No such image".
+        List<String> fetched = new java.util.concurrent.CopyOnWriteArrayList<>();
+        var replay =
+                new DockerImageReplay(docker, new SecureRandom(), Optional.of("shop-test"), () -> true, fetched::add);
+        var db = new ImageReplay.Helper(
+                "db",
+                new Workload.Container("postgres:18", List.of(), List.of(), Optional.empty()),
+                Map.of("POSTGRES_PASSWORD", "test"));
+        var app = new Workload.Container("alpine:3", List.of(), List.of(), Optional.of("sleep 30"));
+
+        var r = replay.start("alpine:3", app, Map.of(), List.of(db));
+        replay.remove(r);
+
+        assertThat(fetched).containsExactly("postgres:18");
+        assertThat(replay.leftoverProofs()).isEmpty();
     }
 
     @Test

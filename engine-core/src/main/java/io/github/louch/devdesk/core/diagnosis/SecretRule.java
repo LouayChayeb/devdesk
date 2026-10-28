@@ -43,7 +43,8 @@ public final class SecretRule implements DiagnosisRule {
         ServiceSpec spec = ctx.project().services().get(service);
         var env = ServiceEnvironment.values(ctx.project(), spec, ctx.environment());
         Set<String> empty = new LinkedHashSet<>();
-        env.forEach((k, v) -> {
+        // Sorted: env files are read into maps without an order, and the message must read the same every time.
+        new java.util.TreeMap<>(env).forEach((k, v) -> {
             if (v.isBlank() && ServiceEnvironment.looksSecret(k)) {
                 empty.add(k);
             }

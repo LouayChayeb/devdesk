@@ -211,7 +211,14 @@ public final class GroupLeftovers implements LeftoverFinder {
             return false; // a record without a marker proves nothing
         }
         try {
-            byte[] environ = Files.readAllBytes(Path.of("/proc", Long.toString(pid), "environ"));
+            Path file = Path.of("/proc", Long.toString(pid), "environ");
+            byte[] environ = Files.readAllBytes(file);
+            // While a process is in execve, the kernel shows no environment until the new program's is set up
+            // (measured: 287 of 300 freshly forked children read empty first). Look again briefly before deciding.
+            for (int i = 0; environ.length == 0 && i < 20; i++) {
+                java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
+                environ = Files.readAllBytes(file);
+            }
             String wanted = MARKER + "=" + marker;
             for (String entry : new String(environ, StandardCharsets.UTF_8).split("\0")) {
                 if (entry.equals(wanted)) {

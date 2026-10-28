@@ -37,7 +37,7 @@ class MongoBrowserTest {
                         "MONGO_INITDB_ROOT_USERNAME=root",
                         "-e",
                         "MONGO_INITDB_ROOT_PASSWORD=dev",
-                        "mongo:8")
+                        "mongo:7") // 8 refuses to start on Linux 6.19 to 7.0.13 (SERVER-121912), as on CI
                 .orElseThrow();
         String mapped = run("docker", "port", NAME, "27017/tcp").orElseThrow().strip();
         int port = Integer.parseInt(mapped.substring(mapped.lastIndexOf(':') + 1));
@@ -52,7 +52,7 @@ class MongoBrowserTest {
                 if (System.nanoTime() > deadline) {
                     // Its own output says why (crashed, still initializing...): worth more than "connection refused".
                     throw new IllegalStateException(
-                            "mongo:8 wasn't ready after 60 s. Its last output:\n"
+                            "mongo:7 wasn't ready after 60 s. Its last output:\n"
                                     + run("docker", "logs", "--tail", "30", NAME)
                                             .orElse("(no logs: it exited)"),
                             e);

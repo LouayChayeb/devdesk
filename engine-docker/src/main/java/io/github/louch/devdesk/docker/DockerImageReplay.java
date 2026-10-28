@@ -46,20 +46,32 @@ public final class DockerImageReplay implements ImageReplay {
     private final Optional<String> projectKey;
     /** Whether this machine reaches containers by their own address (not Docker Desktop, not rootless). */
     private final BooleanSupplier reachable;
+    /** Downloads a database image that isn't here yet (and records it as DevDesk's, as a real start would). */
+    private final ImageFetch fetch;
+
+    /** Makes sure an image is on this machine. */
+    interface ImageFetch {
+        void ensure(String image) throws LaunchException;
+    }
 
     /** How long a database copy may take to accept connections (MySQL's first start takes the longest). */
     private static final Duration DATABASE_READY = Duration.ofSeconds(90);
 
     DockerImageReplay(DockerClient docker, RandomGenerator random) {
-        this(docker, random, Optional.empty(), () -> false);
+        this(docker, random, Optional.empty(), () -> false, image -> {});
     }
 
     DockerImageReplay(
-            DockerClient docker, RandomGenerator random, Optional<String> projectKey, BooleanSupplier reachable) {
+            DockerClient docker,
+            RandomGenerator random,
+            Optional<String> projectKey,
+            BooleanSupplier reachable,
+            ImageFetch fetch) {
         this.docker = docker;
         this.random = random;
         this.projectKey = projectKey;
         this.reachable = reachable;
+        this.fetch = fetch;
     }
 
     @Override
@@ -224,6 +236,8 @@ public final class DockerImageReplay implements ImageReplay {
      * from the replica, and its data dies with it.
      */
     private String startDatabase(Helper h, String replica, String network) throws LaunchException {
+        // On a fresh machine the database's image may not be here yet: a copy needs it like the real one does.
+        fetch.ensure(h.container().image());
         var create = docker.createContainerCmd(h.container().image())
                 .withName(replica + "-" + h.service())
                 .withLabels(labels())

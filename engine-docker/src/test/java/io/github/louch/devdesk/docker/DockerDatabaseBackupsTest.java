@@ -126,7 +126,8 @@ class DockerDatabaseBackupsTest {
 
     @Test
     void anExactMongoRestoreAlsoRemovesNewCollectionsAndDatabases() throws Exception {
-        String name = start("mo", "mongo:8");
+        // mongo:7, not 8: MongoDB 8 refuses to start on Linux kernels 6.19 to 7.0.13 (SERVER-121912), which CI runs.
+        String name = start("mo", "mongo:7");
         String[] mongosh = {"docker", "exec", name, "mongosh", "--quiet", "--eval"};
         waitUntil(
                 () -> sh(append(mongosh, "db.runCommand({ping: 1}).ok")).strip().equals("1"));

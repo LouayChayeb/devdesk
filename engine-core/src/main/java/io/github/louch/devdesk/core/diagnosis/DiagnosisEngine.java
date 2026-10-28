@@ -22,6 +22,7 @@ public final class DiagnosisEngine {
                 new PortConflictRule(),
                 new ProgramMissingRule(),
                 new KilledFromOutsideRule(),
+                new MongoKernelRule(),
                 new CrashRule(),
                 new WrapperCrashRule(),
                 new HealthRule(),

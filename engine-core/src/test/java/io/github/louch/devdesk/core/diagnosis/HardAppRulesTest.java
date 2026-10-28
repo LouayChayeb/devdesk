@@ -177,4 +177,27 @@ class HardAppRulesTest {
         assertThat(new HalfMadeDatabaseRule().evaluate(ctx(TCP_API, Map.of()), "api"))
                 .isEmpty();
     }
+
+    @Test
+    void mongo8OnAKernelItRefusesIsNamedWithTheWayOut() throws Exception {
+        // The line CI's runner printed (Linux 6.19+): one JSON log line among others, then exit 14.
+        states.put("db", new ServiceState.Crashed(ExitStatus.of(14), 0));
+        printed(
+                "db",
+                List.of(err("{\"t\":{\"$date\":\"2026-10-28T14:34:28.626+00:00\"},\"s\":\"F\",\"c\":\"CONTROL\","
+                        + "\"msg\":\"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known"
+                        + " incompatibility with this version of MongoDB. See"
+                        + " https://jira.mongodb.org/browse/SERVER-121912 for more information.\"}")));
+        String yaml = "version: 1\nservices:\n  db: { container: { image: \"mongo:8\" } }\n";
+
+        var f = new MongoKernelRule().evaluate(ctx(yaml, Map.of()), "db");
+
+        assertThat(f).singleElement().satisfies(x -> {
+            assertThat(x.title()).isEqualTo("db: MongoDB 8 can't run on this machine's Linux kernel");
+            assertThat(x.actions()).first().asString().contains("image: mongo:7");
+        });
+        // Another crash isn't this.
+        printed("db", List.of(err("Address already in use")));
+        assertThat(new MongoKernelRule().evaluate(ctx(yaml, Map.of()), "db")).isEmpty();
+    }
 }

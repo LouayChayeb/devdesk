@@ -215,10 +215,10 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         }
         CrashPoint.reach("container.started");
         try {
-            followLogs(id, output);
+            CompletableFuture<Void> logsEnded = followLogs(id, output);
             CompletableFuture<ExitStatus> exit = new CompletableFuture<>();
             exits.put(id, exit);
-            Thread.ofVirtual().name("wait-" + name).start(() -> waitForExit(id, exit));
+            Thread.ofVirtual().name("wait-" + name).start(() -> waitForExit(id, exit, logsEnded));
             Long pid = docker.inspectContainerCmd(id).exec().getState().getPidLong();
             return new RunningContainer(spec.service(), id, name, pid == null ? 0 : pid);
         } catch (RuntimeException e) {
@@ -490,8 +490,10 @@ public final class DockerContainerRuntime implements ContainerRuntime {
         return ports;
     }
 
-    private void followLogs(String id, Consumer<OutputLine> output) {
+    /** Streams the container's output; the future completes when Docker has sent all of it (or the stream broke). */
+    private CompletableFuture<Void> followLogs(String id, Consumer<OutputLine> output) {
         FrameLines lines = new FrameLines(output);
+        CompletableFuture<Void> ended = new CompletableFuture<>();
         docker.logContainerCmd(id)
                 .withStdOut(true)
                 .withStdErr(true)
@@ -507,16 +509,35 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                     @Override
                     public void onComplete() {
                         lines.flush();
+                        ended.complete(null);
                         super.onComplete();
                     }
+
+                    @Override
+                    public void onError(Throwable error) {
+                        lines.flush();
+                        ended.complete(null);
+                        super.onError(error);
+                    }
                 });
+        return ended;
     }
 
-    private void waitForExit(String id, CompletableFuture<ExitStatus> exit) {
+    private void waitForExit(String id, CompletableFuture<ExitStatus> exit, CompletableFuture<Void> logsEnded) {
         try {
             int code = docker.waitContainerCmd(id)
                     .exec(new com.github.dockerjava.api.command.WaitContainerResultCallback())
                     .awaitStatusCode();
+            // Docker can report the exit before the log stream has delivered the last lines: a crash would then be
+            // explained without its error. Wait for the stream to end, but never long (a broken stream mustn't hold
+            // the exit back).
+            try {
+                logsEnded.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e) {
+                // reported without the rest of its output
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             exit.complete(ExitStatus.of(code));
         } catch (DockerException e) {
             exit.complete(ExitStatus.of(137)); // container vanished (removed or Docker restarted)
@@ -722,7 +743,11 @@ public final class DockerContainerRuntime implements ContainerRuntime {
      * and the leftover check find one a DevDesk killed mid-proof left behind.
      */
     public DockerImageReplay imageReplay(java.util.random.RandomGenerator random, String projectKey) {
-        return new DockerImageReplay(docker, random, Optional.of(projectKey), this::containersReachable);
+        return new DockerImageReplay(docker, random, Optional.of(projectKey), this::containersReachable, image -> {
+            if (ensureImage(image, line -> {})) {
+                pulls.record(image, projectKey); // downloaded now, for this project: Remove may delete it
+            }
+        });
     }
 
     /** The underlying client, for this module's tests. */
