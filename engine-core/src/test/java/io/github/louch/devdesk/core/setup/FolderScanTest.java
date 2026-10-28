@@ -158,12 +158,167 @@ class FolderScanTest {
         var services =
                 FolderScan.scan(folder, "/home/me/voting", List.of()).draft().services();
         Map<String, String> commands = new java.util.LinkedHashMap<>();
-        services.forEach(s -> commands.put(s.name(), s.command()));
+        services.forEach(s -> commands.put(s.name(), s.extras().get("native.command")));
 
+        // Each is built from its Dockerfile as a container, once: no "vote-2" running the same app natively.
+        assertThat(services).extracting(SetupDraft.Service::name).containsExactly("vote", "result", "worker");
+        assertThat(services).allMatch(SetupDraft.Service::isContainer);
         assertThat(commands)
                 .containsEntry("vote", "flask --app app run --port 5000")
                 .containsEntry("result", "node server.js")
                 .containsEntry("worker", "dotnet Worker.dll");
+    }
+
+    @Test
+    void aProjectWithOnlyADockerfileIsBuiltAndRunFromIt() {
+        var folder = new FakeFolder(
+                "hello-api",
+                Map.of(
+                        "Dockerfile",
+                                "FROM node:22\nCOPY . .\nRUN npm ci\nEXPOSE 8080 9229/udp\nCMD [\"node\", \"index.js\"]\n",
+                        "package.json", "{\"main\": \"index.js\", \"dependencies\": {\"express\": \"4\"}}",
+                        "index.js", "app.listen(8080)\n"));
+
+        var scan = FolderScan.scan(folder, "/home/me/hello-api", List.of());
+        var services = scan.draft().services();
+
+        // One card, not a container plus the same app run natively.
+        assertThat(services).singleElement().satisfies(s -> {
+            assertThat(s.kind()).isEqualTo("container");
+            assertThat(s.extras()).containsEntry("build", ".").containsEntry("native.command", "node index.js");
+            assertThat(s.ports()).containsExactly("8080:8080"); // UDP can't be published like this
+            assertThat(s.origin()).isEqualTo("Dockerfile");
+        });
+        assertThat(scan.found()).anyMatch(f -> f.startsWith("Dockerfile: built and run as"));
+    }
+
+    @Test
+    void aComposeProjectsMissingEnvFileIsMadeFromItsSampleNeverReplacedByTheDevelopmentOne() {
+        // Mastodon: web reads .env.production (only .env.production.sample is in the repository), and the root has
+        // a .env.development for its own developers.
+        var folder = new FakeFolder(
+                "mastodon",
+                Map.of(
+                        "docker-compose.yml",
+                        "services:\n  web:\n    image: ghcr.io/mastodon/mastodon:v4.7.3\n    env_file: .env.production\n",
+                        ".env.production.sample",
+                        "LOCAL_DOMAIN=example.com\nSECRET_KEY_BASE=\n",
+                        ".env.development",
+                        "RAILS_ENV=development\n"));
+
+        var draft = FolderScan.scan(folder, "/home/me/mastodon", List.of()).draft();
+
+        assertThat(draft.envFiles()).isEmpty(); // not .env.development
+        var web = draft.services().getFirst();
+        assertThat(web.extras()).containsEntry("env_files", ".env.production");
+        assertThat(web.notes()).anyMatch(n -> n.contains("Set up makes it from .env.production.sample"));
+        var plan = FreshSetup.of(draft, folder::read, f -> false);
+        assertThat(plan.steps().getFirst()).isInstanceOfSatisfying(FreshSetup.Step.CreateEnv.class, e -> {
+            assertThat(e.file()).isEqualTo(".env.production");
+            assertThat(e.questions()).extracting(FreshSetup.Question::key).containsExactly("SECRET_KEY_BASE");
+        });
+    }
+
+    @Test
+    void variablesNothingSetsMakeSetUpAskForThemInDotEnv() {
+        // Plausible: compose uses ${BASE_URL} and ${SECRET_KEY_BASE}, and there's no .env or example.
+        var folder = new FakeFolder(
+                "plausible",
+                Map.of(
+                        "compose.yml",
+                        "services:\n  plausible:\n    image: plausible:3\n    environment:\n"
+                                + "      BASE_URL: ${BASE_URL}\n      SECRET_KEY_BASE: ${SECRET_KEY_BASE}\n"));
+
+        var draft = FolderScan.scan(folder, "/home/me/plausible", List.of()).draft();
+
+        assertThat(draft.envFiles()).containsExactly(".env");
+        var plan = FreshSetup.of(draft, folder::read, f -> false);
+        assertThat(plan.steps().getFirst())
+                .isInstanceOfSatisfying(
+                        FreshSetup.Step.CreateEnv.class,
+                        e -> assertThat(e.questions())
+                                .extracting(FreshSetup.Question::key)
+                                .containsExactly("BASE_URL", "SECRET_KEY_BASE"));
+    }
+
+    @Test
+    void theOverrideFileIsReadOnTopLikeComposeDoes() {
+        // Plausible publishes its port in compose.override.yml.
+        var folder = new FakeFolder(
+                "plausible",
+                Map.of(
+                        "compose.yml",
+                        "services:\n  plausible:\n    image: plausible:3\n    command: run\n",
+                        "compose.override.yml",
+                        "services:\n  plausible:\n    ports:\n      - 8000:80\n    command: [run, --fast]\n"));
+
+        var scan = FolderScan.scan(folder, "/home/me/plausible", List.of());
+        var card = scan.draft().services().getFirst();
+
+        assertThat(card.ports()).containsExactly("8000:80");
+        assertThat(card.command()).isEqualTo("run --fast"); // a command is replaced, not added to
+        assertThat(scan.found()).contains("compose.override.yml: read on top of compose.yml, like docker compose does");
+    }
+
+    @Test
+    void mergeKeysAndEntrypointReachTheCardsAndNoNativeCopyIsAdded() {
+        // Chatwoot's production compose: services get their image through <<: *base, rails starts through a script,
+        // and the top folder has the app's own package.json.
+        var folder = new FakeFolder(
+                "chatwoot",
+                Map.of(
+                        "docker-compose.yml",
+                        "services:\n  base: &base\n    image: chatwoot/chatwoot:v4.19.1\n    volumes:\n"
+                                + "      - storage_data:/app/storage\n  rails:\n    <<: *base\n"
+                                + "    entrypoint: docker/entrypoints/rails.sh\n    command: ['bundle', 'exec', 'rails', 's']\n"
+                                + "    ports: ['3000:3000']\n",
+                        "package.json",
+                        "{\"scripts\": {\"dev\": \"pnpm run dev\"}}"));
+
+        var services =
+                FolderScan.scan(folder, "/home/me/chatwoot", List.of()).draft().services();
+
+        assertThat(services).extracting(SetupDraft.Service::name).containsExactly("base", "rails");
+        var rails = services.get(1);
+        assertThat(rails.image()).isEqualTo("chatwoot/chatwoot:v4.19.1");
+        assertThat(rails.volumes()).containsExactly("chatwoot_storage_data:/app/storage");
+        assertThat(rails.extras()).containsEntry("entrypoint", "docker/entrypoints/rails.sh");
+        assertThat(SetupYaml.write(new SetupDraft("chatwoot", List.of(), services, List.of())))
+                .contains("      entrypoint: docker/entrypoints/rails.sh\n");
+    }
+
+    @Test
+    void aFolderNamedLikeAComposeServiceIsThatServiceNotANewOne() {
+        // Mastodon: the streaming container, and streaming/package.json next to it.
+        var folder = new FakeFolder(
+                "mastodon",
+                Map.of(
+                        "docker-compose.yml",
+                        "services:\n  streaming:\n    image: ghcr.io/mastodon/mastodon-streaming:v4.7.3\n",
+                        "streaming/package.json",
+                        "{\"scripts\": {\"start\": \"node index.js\"}}"));
+
+        var services =
+                FolderScan.scan(folder, "/home/me/mastodon", List.of()).draft().services();
+
+        assertThat(services).extracting(SetupDraft.Service::name).containsExactly("streaming");
+    }
+
+    @Test
+    void anAppOnAPortComposeAlreadyPublishesIsNotAddedTwice() {
+        // Like umami: the official image in compose, and the same app's package.json at the root.
+        var folder = new FakeFolder(
+                "umami",
+                Map.of(
+                        "docker-compose.yml",
+                        "services:\n  umami:\n    image: ghcr.io/umami-software/umami\n    ports: [\"3000:3000\"]\n",
+                        "package.json",
+                        "{\"scripts\": {\"dev\": \"next dev -p 3000\"}}"));
+
+        var services =
+                FolderScan.scan(folder, "/home/me/umami", List.of()).draft().services();
+
+        assertThat(services).extracting(SetupDraft.Service::name).containsExactly("umami");
     }
 
     @Test

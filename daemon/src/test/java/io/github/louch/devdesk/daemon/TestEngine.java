@@ -27,6 +27,13 @@ record TestEngine(Process process, int port, String base, String token, HttpClie
     /** @param jvmOptions extra JVM options, e.g. the crash-point properties */
     static TestEngine start(Path home, String extras, boolean noSystemd, java.util.List<String> jvmOptions)
             throws Exception {
+        return start(home, extras, noSystemd, jvmOptions, Map.of());
+    }
+
+    /** @param env extra environment for the engine, e.g. the image builder tests use (BUILDX_BUILDER) */
+    static TestEngine start(
+            Path home, String extras, boolean noSystemd, java.util.List<String> jvmOptions, Map<String, String> env)
+            throws Exception {
         var command = new java.util.ArrayList<>(java.util.List.of("java", "--enable-native-access=ALL-UNNAMED"));
         command.addAll(jvmOptions);
         command.addAll(java.util.List.of("-cp", System.getProperty("java.class.path"), Main.class.getName()));
@@ -42,6 +49,7 @@ record TestEngine(Process process, int port, String base, String token, HttpClie
         if (extras != null) {
             builder.environment().put(Extras.ENV, extras);
         }
+        builder.environment().putAll(env);
         Process p = builder.start();
         var reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
         Map<?, ?> hello = ApiJson.MAPPER.readValue(reader.readLine(), Map.class);

@@ -34,6 +34,11 @@ public final class Install {
             case "yarn" -> "corepack enable yarn (comes with Node)";
             case "mvn" -> "sudo apt install maven, or use the project's ./mvnw if it has one";
             case "gradle" -> "sudo apt install gradle, or use the project's ./gradlew if it has one";
+            case "go" -> "install Go" + v + " from https://go.dev/dl/ (Ubuntu's golang-go package is often older)";
+            case "dotnet" ->
+                "install the .NET SDK" + v + ": https://learn.microsoft.com/dotnet/core/install/linux (on Ubuntu:"
+                        + " sudo apt install dotnet-sdk-"
+                        + (version.isBlank() ? "8.0" : version.replaceFirst("^(\\d+\\.\\d+).*", "$1")) + ")";
             default -> "install " + tool;
         };
     }

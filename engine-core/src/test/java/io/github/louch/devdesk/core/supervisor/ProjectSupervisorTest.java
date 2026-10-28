@@ -455,6 +455,31 @@ class ProjectSupervisorTest {
     }
 
     @Test
+    void aServiceBlockedByAFailedDependencyStartsWhenTheDependencyRecovers() throws Exception {
+        // Twenty: the server failed its first health checks while it set up its database, the worker was blocked,
+        // and stayed blocked after the server became healthy.
+        unhealthy.add("store");
+        var s = supervisor("""
+                version: 1
+                services:
+                  store:
+                    command: serve
+                    health: { type: command, command: store, %s }
+                  worker:
+                    command: work
+                    depends_on: { store: { condition: healthy } }
+                """.formatted(FAST));
+        s.up();
+        awaitState(s, "worker", ServiceState.Blocked.class);
+
+        unhealthy.remove("store"); // its setup finished: the next check passes
+
+        awaitState(s, "worker", ServiceState.Running.class);
+        assertThat(events).anySatisfy(e -> assertThat(e.toString()).contains("store recovered: starting it now"));
+        s.down().get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
     void aCrashedContainerIsRemovedNotLeftBehind() throws Exception {
         supervisor("""
                 version: 1

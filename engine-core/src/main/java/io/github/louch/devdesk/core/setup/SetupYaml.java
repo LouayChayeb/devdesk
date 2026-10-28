@@ -62,6 +62,23 @@ public final class SetupYaml {
         if (s.isContainer()) {
             y.append("    container:\n");
             y.append("      image: ").append(scalar(s.image())).append('\n');
+            String build = s.extras().get("build");
+            if (build != null) {
+                String context =
+                        build.equals(".") || build.startsWith("/") || build.startsWith("./") ? build : "./" + build;
+                String dockerfile = s.extras().get("build.dockerfile");
+                y.append("      build: ")
+                        .append(
+                                dockerfile == null
+                                        ? scalar(context)
+                                        : "{ context: " + scalar(context) + ", dockerfile: " + scalar(dockerfile)
+                                                + " }")
+                        .append('\n');
+            }
+            String entrypoint = s.extras().get("entrypoint");
+            if (entrypoint != null && !entrypoint.isBlank()) {
+                y.append("      entrypoint: ").append(scalar(entrypoint)).append('\n');
+            }
             if (!s.command().isBlank()) {
                 y.append("      command: ").append(scalar(s.command())).append('\n');
             }
@@ -85,6 +102,12 @@ public final class SetupYaml {
                 y.append("    ports: ").append(flow(s.ports())).append('\n');
             }
             environment(y, s.environment(), "    ");
+        }
+        String ownEnvFiles = s.extras().get("env_files");
+        if (ownEnvFiles != null && !ownEnvFiles.isBlank()) {
+            y.append("    env_files: ")
+                    .append(flow(List.of(ownEnvFiles.split(","))))
+                    .append('\n');
         }
         if (!s.dependsOn().isEmpty()) {
             y.append("    depends_on:\n");

@@ -32,6 +32,7 @@ import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.Workload;
 import io.github.louch.devdesk.core.setup.FolderScan;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -72,9 +73,63 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     /** Whether this machine reaches container addresses directly; null until Docker was asked. */
     private volatile Boolean reachable;
 
+    private final ImageBuilder builder;
+
     public DockerContainerRuntime(DockerClient docker) {
+        this(docker, System.getenv());
+    }
+
+    private final PullLog pulls;
+
+    /** @param environment where the docker command is found (PATH) when an image must be built */
+    public DockerContainerRuntime(DockerClient docker, Map<String, String> environment) {
+        this(docker, environment, Optional.empty());
+    }
+
+    /** @param pullLog where downloaded images are recorded per project, so Remove can tell them from the user's */
+    public DockerContainerRuntime(DockerClient docker, Map<String, String> environment, Optional<Path> pullLog) {
         this.docker = docker;
         this.network = new ProjectNetwork(docker);
+        this.builder = new ImageBuilder(environment);
+        this.pulls = new PullLog(pullLog);
+    }
+
+    /**
+     * Deletes everything inside {@code folder} as root, from a short-lived container that sees only that folder:
+     * containers write their data (a database's files) as their own users, which DevDesk's user can't delete. Used
+     * only for a clone DevDesk made. Empty when done, otherwise why not.
+     */
+    public Optional<String> deleteInside(java.nio.file.Path folder) {
+        String helper = "alpine:3";
+        try {
+            ensureImage(helper, line -> {});
+            var create = docker.createContainerCmd(helper)
+                    .withLabels(Map.of(PROJECT_LABEL, "devdesk-cleanup", SERVICE_LABEL, "cleanup"))
+                    // -mindepth 1: the folder itself stays (it's the mount point); -delete never follows links.
+                    .withCmd("find", "/clone", "-mindepth", "1", "-delete")
+                    .withHostConfig(HostConfig.newHostConfig()
+                            .withBinds(Bind.parse(folder.toAbsolutePath().normalize() + ":/clone")));
+            String id = create.exec().getId();
+            try {
+                docker.startContainerCmd(id).exec();
+                Integer code =
+                        docker.waitContainerCmd(id).start().awaitStatusCode(120, java.util.concurrent.TimeUnit.SECONDS);
+                return code != null && code == 0
+                        ? Optional.empty()
+                        : Optional.of("the cleanup container ended with code " + code);
+            } finally {
+                removeContainer(id);
+            }
+        } catch (LaunchException | DockerException e) {
+            return Optional.of("Docker couldn't delete them: " + e.getMessage());
+        } catch (RuntimeException e) {
+            return Optional.of("Docker couldn't delete them: " + e);
+        }
+    }
+
+    /** "Remove" for this Docker: what DevDesk made for a project, found by its labels and records. */
+    public DockerRemoval removal() {
+        return new DockerRemoval(docker, pulls);
     }
 
     /** Database backups through the same Docker connection (dump tools run inside the database's container). */
@@ -102,7 +157,12 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     public RunningContainer start(ContainerLaunchSpec spec, Consumer<OutputLine> output) throws LaunchException {
         Workload.Container c = spec.container();
         String name = containerName(spec.project(), spec.service());
-        ensureImage(c.image(), output);
+        if (c.build().isPresent()) {
+            ensureBuilt(c.image(), c.build().get(), spec, output);
+        } else if (ensureImage(c.image(), output)) {
+            pulls.record(c.image(), spec.projectKey());
+        }
+        ensureVolumes(c, spec);
         removeOurLeftover(name, spec);
         if (Thread.currentThread().isInterrupted()) {
             throw new LaunchException("stopped before it was started", null); // a stop arrived while pulling
@@ -126,7 +186,7 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                             .map(e -> e.getKey() + "=" + e.getValue())
                             .toList())
                     .withExposedPorts(c.ports().stream()
-                            .map(p -> ExposedPort.tcp(p.containerPort()))
+                            .map(p -> p.udp() ? ExposedPort.udp(p.containerPort()) : ExposedPort.tcp(p.containerPort()))
                             .toList())
                     .withHostConfig(HostConfig.newHostConfig()
                             .withNetworkMode(net)
@@ -134,6 +194,13 @@ public final class DockerContainerRuntime implements ContainerRuntime {
                             .withBinds(c.volumes().stream().map(Bind::parse).toList()));
             // Only override the command when the user gave one; otherwise the image's own default runs.
             arguments(c).ifPresent(create::withCmd);
+            if (c.entrypoint().isPresent()) {
+                create.withEntrypoint(ShellWords.split(c.entrypoint().get())
+                        .orElseThrow(() -> new LaunchException(
+                                "the container entrypoint has a quote that is never closed: "
+                                        + c.entrypoint().get(),
+                                null)));
+            }
             id = create.exec().getId();
             keys.put(id, spec.projectKey());
         } catch (DockerException e) {
@@ -284,10 +351,59 @@ public final class DockerContainerRuntime implements ContainerRuntime {
 
     // ---- helpers ----
 
-    private void ensureImage(String image, Consumer<OutputLine> output) throws LaunchException {
+    /** Builds the image from the project's Dockerfile the first time; later starts reuse it, like compose up. */
+    private void ensureBuilt(String image, Workload.Build build, ContainerLaunchSpec spec, Consumer<OutputLine> output)
+            throws LaunchException {
         try {
             docker.inspectImageCmd(image).exec();
-            return; // already here: no download
+            return;
+        } catch (NotFoundException e) {
+            // not built yet
+        }
+        builder.build(
+                image,
+                build,
+                Map.of(
+                        PROJECT_LABEL,
+                        spec.project(),
+                        PROJECT_KEY_LABEL,
+                        spec.projectKey(),
+                        SERVICE_LABEL,
+                        spec.service()),
+                output);
+    }
+
+    /**
+     * Named volumes the project uses that don't exist yet are created with its labels: Remove then deletes exactly
+     * those. One that exists already (the user's, or compose's) is used as it is and never labelled or removed.
+     */
+    private void ensureVolumes(Workload.Container c, ContainerLaunchSpec spec) throws LaunchException {
+        for (String v : c.volumes()) {
+            String source = v.substring(0, Math.max(0, v.indexOf(':')));
+            if (source.isEmpty() || source.startsWith("/")) {
+                continue; // a folder of this machine, not a volume
+            }
+            try {
+                docker.inspectVolumeCmd(source).exec();
+            } catch (NotFoundException e) {
+                try {
+                    docker.createVolumeCmd()
+                            .withName(source)
+                            .withLabels(Map.of(PROJECT_LABEL, spec.project(), PROJECT_KEY_LABEL, spec.projectKey()))
+                            .exec();
+                } catch (DockerException creating) {
+                    throw new LaunchException(
+                            "Docker could not create the volume " + source + ": " + clean(creating), creating);
+                }
+            }
+        }
+    }
+
+    /** True when it was downloaded now, false when it was already here. */
+    private boolean ensureImage(String image, Consumer<OutputLine> output) throws LaunchException {
+        try {
+            docker.inspectImageCmd(image).exec();
+            return false; // already here: no download
         } catch (NotFoundException e) {
             output.accept(new OutputLine(StreamKind.STDERR, "[devdesk] pulling image " + image + " ..."));
         }
@@ -320,6 +436,7 @@ public final class DockerContainerRuntime implements ContainerRuntime {
             Thread.currentThread().interrupt();
             throw new LaunchException("stopped while pulling " + image, e);
         }
+        return true;
     }
 
     /**
@@ -366,7 +483,9 @@ public final class DockerContainerRuntime implements ContainerRuntime {
     private static Ports portBindings(Workload.Container c) {
         Ports ports = new Ports();
         for (Workload.PortMapping p : c.ports()) {
-            ports.bind(ExposedPort.tcp(p.containerPort()), Ports.Binding.bindIpAndPort(p.hostAddress(), p.hostPort()));
+            ports.bind(
+                    p.udp() ? ExposedPort.udp(p.containerPort()) : ExposedPort.tcp(p.containerPort()),
+                    Ports.Binding.bindIpAndPort(p.hostAddress(), p.hostPort()));
         }
         return ports;
     }

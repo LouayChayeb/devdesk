@@ -74,6 +74,19 @@ devdesk trust               # shows the commands it will run, asks once
 devdesk up                  # starts in order, waits for health; Ctrl+C stops everything
 ```
 
+Someone else's project, from its link:
+
+```bash
+devdesk get https://github.com/owner/project   # clone, propose devdesk.yaml, trust, set up, start
+devdesk remove ~/DevDesk/project               # later: delete everything DevDesk made for it
+```
+
+`get` builds services from the project's own Dockerfiles when it ships them (nothing installed on your machine),
+otherwise lists what's missing and runs the installs in the project folder after you confirm each. `remove` shows
+the list first (and says when database data goes), deletes only what carries the project's key, never a folder you
+opened, then checks again that nothing is left. In the app: project menu → **Get a project from a link** /
+**Remove project**.
+
 Other commands: `devdesk ps` (what runs, and leftovers), `devdesk history` (what happened while you weren't looking),
 `devdesk doctor` (can this machine run it?), `devdesk why --prove` (replay a changed image).
 

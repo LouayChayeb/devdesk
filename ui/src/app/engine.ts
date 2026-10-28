@@ -642,6 +642,10 @@ export interface RunView {
   total: number;
   results: { id: string; name: string; method: string; url: string; ok: boolean; outcome?: string; status?: number; ms?: number; checks?: CheckResultView[]; explanation?: string; error?: string }[];
 }
+export interface GetStatus { state: 'idle' | 'cloning' | 'done' | 'failed'; lines: string[]; folder: string; error: string; }
+export interface RemovalItem { kind: string; what: string; data: boolean; }
+export interface RemovalPlan { project: string; folder: string; cloned: boolean; items: RemovalItem[]; losesData: boolean; kept: string[]; }
+export interface RemovalReport { removed: RemovalItem[]; failed: string[]; leftovers: RemovalItem[]; clean: boolean; }
 export type DataAnswer<T> = { ok: true; value: T } | { ok: false; error: string };
 /** One card of the "Add project" wizard: exactly what devdesk.yaml will say about the service. */
 export interface SetupService {
@@ -927,6 +931,24 @@ export class Engine {
   }
   setupDatabase(kind: string, draft: SetupDraft): Promise<DataAnswer<SetupService>> {
     return this.data('POST', '/setup/database', { kind, draft }, (b) => b);
+  }
+  // ---- "Get it running" and "Remove" (the engine clones, plans and deletes) ----
+
+  getStart(link: string): Promise<DataAnswer<GetStatus>> {
+    return this.data('POST', '/get', { link }, (b) => b);
+  }
+  getStatus(): Promise<DataAnswer<GetStatus>> {
+    return this.data('GET', '/get', undefined, (b) => b);
+  }
+  removalPlan(): Promise<DataAnswer<RemovalPlan>> {
+    return this.data('GET', '/project/removal', undefined, (b) => b);
+  }
+  removeProject(): Promise<DataAnswer<RemovalReport>> {
+    return this.data('POST', '/project/remove', { confirm: true }, (b) => b);
+  }
+
+  setupSwitch(draft: SetupDraft, index: number, kind: 'command' | 'container'): Promise<DataAnswer<SetupService>> {
+    return this.data('POST', '/setup/switch', { draft, index, kind }, (b) => b);
   }
   setupPreview(path: string, draft: SetupDraft): Promise<DataAnswer<SetupPreview>> {
     return this.data('POST', '/setup/preview', { path, draft }, (b) => b);

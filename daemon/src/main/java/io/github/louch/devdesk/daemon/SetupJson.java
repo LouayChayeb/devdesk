@@ -74,6 +74,15 @@ final class SetupJson {
                                 .map(q -> Map.of("key", q.key(), "example", q.example(), "secret", q.secret()))
                                 .toList());
             }
+            case FreshSetup.Step.FillEnv f -> {
+                m.put("kind", "env");
+                m.put("file", f.file());
+                m.put(
+                        "questions",
+                        f.questions().stream()
+                                .map(q -> Map.of("key", q.key(), "example", q.example(), "secret", q.secret()))
+                                .toList());
+            }
             case FreshSetup.Step.Job j -> {
                 m.put("kind", "job");
                 m.put("service", j.service());

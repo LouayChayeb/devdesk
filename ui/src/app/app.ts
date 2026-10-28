@@ -22,6 +22,7 @@ import { DocView } from './doc-view';
 import { Requests } from './requests';
 import { SetupWizard } from './setup-wizard';
 import { FreshSetup } from './fresh-setup';
+import { GetProject, RemoveProject } from './get-remove';
 import { EnvEditor } from './env-editor';
 import { TasksBar } from './tasks-bar';
 import { LogSearch } from './log-search';
@@ -36,7 +37,7 @@ const UI_KEY = 'devdesk.ui';
 
 @Component({
   selector: 'app-root',
-  imports: [StatusDot, ServicesTable, LogsPanel, DiagnosisPanel, TimelinePanel, ConnectionsPanel, ServiceDrawer, GraphPanel, PortsPanel, CommandPalette, Icon, DataPanel, ApiPanel, MailPanel, DocView, SetupWizard, FreshSetup, EnvEditor, TasksBar, LogSearch, ProjectSwitch, ShellView, TestsPage, SnapshotsView, RemoteViewComponent],
+  imports: [StatusDot, ServicesTable, LogsPanel, DiagnosisPanel, TimelinePanel, ConnectionsPanel, ServiceDrawer, GraphPanel, PortsPanel, CommandPalette, Icon, DataPanel, ApiPanel, MailPanel, DocView, SetupWizard, FreshSetup, GetProject, RemoveProject, EnvEditor, TasksBar, LogSearch, ProjectSwitch, ShellView, TestsPage, SnapshotsView, RemoteViewComponent],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
@@ -68,6 +69,9 @@ export class App {
   readonly setupFor = signal<string | null>(null);
   /** The folder "Set up" (fresh clone: .env, packages, images, one-time jobs) is open for. */
   readonly freshFor = signal<string | null>(null);
+  /** "Get it running" (a link) and "Remove" dialogs. */
+  readonly getOpen = signal(false);
+  readonly removeOpen = signal(false);
   readonly envOpen = signal(false);
   readonly snapshotsOpen = signal(false);
   /** Deploy / remote dev box. */
@@ -446,7 +450,7 @@ export class App {
 
   @HostListener('document:keydown', ['$event'])
   keys(e: KeyboardEvent): void {
-    if (this.setupFor() || this.freshFor() || this.envOpen() || this.snapshotsOpen() || this.remoteOpen() || this.logSearch() || this.shellFor() || this.switching() !== null) return;
+    if (this.setupFor() || this.freshFor() || this.getOpen() || this.removeOpen() || this.envOpen() || this.snapshotsOpen() || this.remoteOpen() || this.logSearch() || this.shellFor() || this.switching() !== null) return;
     if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'o') {
       e.preventDefault();
       this.projectMenu.set(false);
@@ -499,13 +503,24 @@ export class App {
   }
 
   /** Opening failed because an env file is missing: a fresh clone, which "Set up" prepares. */
-  readonly needsSetup = computed(() => !!this.openError()?.problems?.some((p) => p.path === 'env_files'));
+  readonly needsSetup = computed(() => !!this.openError()?.problems?.some((p) => p.path.endsWith('env_files')));
 
   freshSetup(path?: string): void {
     this.projectMenu.set(false);
     // After a failed open, the folder that failed; otherwise the open project.
     const folder = path ?? (this.needsSetup() || !this.engine.project() ? this.lastPath : this.engine.project()!.root);
     if (folder) this.freshFor.set(folder);
+  }
+
+  /** A project downloaded from a link: opened like any folder (the wizard drafts its devdesk.yaml). */
+  async gotProject(folder: string): Promise<void> {
+    this.getOpen.set(false);
+    await this.open(folder);
+  }
+
+  removed(r: { folder: string; gone: boolean }): void {
+    this.removeOpen.set(false);
+    if (r.gone) this.forgetProject(r.folder);
   }
 
   async freshDone(path: string): Promise<void> {

@@ -55,9 +55,9 @@ class ConfigErrorsTest {
             { container: { image: a, ports: ["80:65536"] } } | services.api.container.ports: ports go from 1 to 65535, found "80:65536"
             { container: { image: a, ports: 80 } }  | services.api.container.ports: expected a list like [a, b], found "80"
             { container: { image: a, tag: 1 } }     | services.api.container: unknown key "tag"
+            { container: { build: { context: ., file: x } } } | services.api.container.build: unknown key "file"
             { command: x, environment: [A] }        | services.api.environment: expected KEY: value pairs, found a list
             { command: x, environment: { A: } }     | services.api.environment.A: expected a value, found empty
-            { command: "${NOPE}" }                  | services.api.command: variable ${NOPE} is not set
             { command: "${NOPE:?Variable not set}" } | services.api.command: variable ${NOPE} is required and not set ("Variable not set")
             { command: x, ports: [0] }              | services.api.ports: expected a whole number from 1 to 65535, found "0"
             { command: x, ports: [65536] }          | services.api.ports: expected a whole number from 1 to 65535, found "65536"

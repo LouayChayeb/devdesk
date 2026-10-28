@@ -51,8 +51,24 @@ public final class Doctor {
     static final long GIB = 1024L * 1024 * 1024;
     private static final JsonMapper JSON = JsonMapper.shared();
     private static final Map<String, String> NAMES = Map.of(
-            "node", "Node", "python", "Python", "java", "Java", "pnpm", "pnpm", "yarn", "Yarn", "mvn", "Maven",
-            "gradle", "Gradle");
+            "node",
+            "Node",
+            "python",
+            "Python",
+            "java",
+            "Java",
+            "pnpm",
+            "pnpm",
+            "yarn",
+            "Yarn",
+            "mvn",
+            "Maven",
+            "gradle",
+            "Gradle",
+            "go",
+            "Go",
+            "dotnet",
+            ".NET SDK");
 
     private Doctor() {}
 
@@ -205,7 +221,16 @@ public final class Doctor {
         int missing = 0;
         Map<String, String> built = composeBuilds(project, facts);
         for (ServiceSpec s : containers) {
-            String image = ((Workload.Container) s.workload()).image();
+            Workload.Container c = (Workload.Container) s.workload();
+            String image = c.image();
+            if (c.build().isPresent()) {
+                if (!facts.localImages().get().contains(normalize(image))) {
+                    // Not a problem: DevDesk builds it from the project's Dockerfile on the first start.
+                    passed.add(s.name() + "'s image is built from "
+                            + c.build().get().dockerfile() + " when it first starts");
+                }
+                continue;
+            }
             if (!facts.localImages().get().contains(normalize(image)) && built.containsKey(normalize(image))) {
                 // Found on real projects: compose builds this image itself, so no registry has it.
                 missing++;

@@ -7,6 +7,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,7 +25,19 @@ public record ProjectSpec(
         Map<String, String> environment,
         Map<String, ServiceSpec> services,
         Map<String, Profile> profiles,
-        Map<String, TaskSpec> tasks) {
+        Map<String, TaskSpec> tasks,
+        List<String> warnings) {
+
+    /** A project with nothing to warn about. */
+    public ProjectSpec(
+            String name,
+            Path root,
+            Map<String, String> environment,
+            Map<String, ServiceSpec> services,
+            Map<String, Profile> profiles,
+            Map<String, TaskSpec> tasks) {
+        this(name, root, environment, services, profiles, tasks, List.of());
+    }
 
     /** A project without profiles. */
     public ProjectSpec(String name, Path root, Map<String, String> environment, Map<String, ServiceSpec> services) {
@@ -36,6 +49,11 @@ public record ProjectSpec(
      * "api" in different folders never mix (history, leftovers, locks). E.g. "three-tier-70fadd7e".
      */
     public String key() {
+        return keyOf(name, root);
+    }
+
+    /** The key a project with this name in this folder gets, before its devdesk.yaml is loaded (Set up's downloads). */
+    public static String keyOf(String name, Path root) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256")
                     .digest(root.toAbsolutePath().normalize().toString().getBytes(StandardCharsets.UTF_8));
@@ -46,7 +64,12 @@ public record ProjectSpec(
         }
     }
 
+    /**
+     * The values are copied, so a project never changes after it's read. {@code warnings}: what's allowed but probably
+     * not meant, said when the project opens ("${BASE_URL} isn't set, so it's empty"), like compose's warnings.
+     */
     public ProjectSpec {
+        warnings = List.copyOf(warnings);
         environment = Map.copyOf(environment);
         // LinkedHashMap keeps file order, so output lists services the way the user wrote them.
         services = Collections.unmodifiableMap(new LinkedHashMap<>(services));

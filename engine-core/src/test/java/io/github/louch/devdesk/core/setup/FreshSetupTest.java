@@ -86,6 +86,87 @@ class FreshSetupTest {
     }
 
     @Test
+    void builtImagesAreNotDownloadedAndGoAndDotnetGetTheirInstalls() throws Exception {
+        var draft = ExistingSetup.read("""
+                version: 1
+                services:
+                  web: { container: { image: shop-web, build: ./web } }
+                  db: { container: { image: postgres:18 } }
+                  api: { command: go run ., directory: api }
+                  worker: { command: dotnet run, directory: worker }
+                """, "shop");
+
+        var plan = FreshSetup.of(
+                draft, f -> f.equals("api/go.mod") ? Optional.of("module shop\n") : Optional.empty(), f -> false);
+
+        // shop-web isn't on any registry: DevDesk builds it when it starts.
+        assertThat(plan.steps())
+                .extracting(FreshSetup.Step::id)
+                .containsExactly("install:api", "install:worker", "pull:postgres:18");
+        assertThat(plan.steps())
+                .filteredOn(s -> s instanceof FreshSetup.Step.Run)
+                .extracting(s -> ((FreshSetup.Step.Run) s).command())
+                .containsExactly("go mod download", "dotnet restore", "docker pull postgres:18");
+    }
+
+    @Test
+    void theProjectsOwnPlaceholdersAreAskedForAndRealValuesArent() throws Exception {
+        var draft = ExistingSetup.read("version: 1\nenv_files: [.env]\nservices:\n  web: { command: rails s }\n", "x");
+        String example = String.join(
+                "\n",
+                "SECRET_KEY_BASE=replace_with_lengthy_secure_hex", // Chatwoot
+                "ENCRYPTION_KEY=replace_me_with_a_random_string", // Twenty
+                "API_TOKEN=changethis",
+                "ADMIN_PASSWORD=<your password>",
+                "REDIS_URL=redis://redis:6379",
+                "CHANGELOG_URL=https://example.com/changelog",
+                "REPLACEMENT_POLICY=never",
+                "");
+
+        var plan = FreshSetup.of(
+                draft, f -> f.equals(".env.example") ? Optional.of(example) : Optional.empty(), f -> false);
+
+        assertThat(((FreshSetup.Step.CreateEnv) plan.steps().getFirst()).questions())
+                .extracting(FreshSetup.Question::key)
+                .containsExactly("SECRET_KEY_BASE", "ENCRYPTION_KEY", "API_TOKEN", "ADMIN_PASSWORD");
+    }
+
+    @Test
+    void anImageNameIsResolvedBeforeItsDownload() throws Exception {
+        // Twenty: twentycrm/twenty:${TAG:-latest} with TAG=v2.52.0 in .env got "latest" when the shell resolved it.
+        var draft = ExistingSetup.read(
+                "version: 1\nenv_files: [.env]\nservices:\n  server: { container: { image: \"twentycrm/twenty:${TAG:-latest}\" } }\n"
+                        + "  worker: { container: { image: \"twentycrm/twenty:${TAG:-latest}\" } }\n  db: { container: { image: \"postgres:${PG:-16}\" } }\n",
+                "twenty");
+
+        var plan = FreshSetup.of(
+                draft, f -> f.equals(".env") ? Optional.of("TAG=v2.52.0\n") : Optional.empty(), f -> false);
+
+        assertThat(plan.steps())
+                .extracting(FreshSetup.Step::id)
+                .containsExactly("pull:twentycrm/twenty:v2.52.0", "pull:postgres:16");
+    }
+
+    @Test
+    void placeholderSecretsInAnEnvFileTheProjectShipsAreAskedFor() throws Exception {
+        // Like paperless-ngx's docker-compose.env: its current image refuses PAPERLESS_SECRET_KEY=change-me.
+        var draft = ExistingSetup.read(
+                "version: 1\nenv_files: [docker-compose.env]\nservices:\n  web: { container: { image: paperless } }\n",
+                "paperless");
+        String env = "PAPERLESS_SECRET_KEY=change-me\nPAPERLESS_TIME_ZONE=changeme\nPAPERLESS_OCR_LANGUAGE=eng\n";
+
+        var plan = FreshSetup.of(
+                draft, f -> f.equals("docker-compose.env") ? Optional.of(env) : Optional.empty(), f -> false);
+
+        assertThat(plan.steps().getFirst())
+                .isEqualTo(new FreshSetup.Step.FillEnv(
+                        "fill:docker-compose.env",
+                        "Replace 1 placeholder value in docker-compose.env",
+                        "docker-compose.env",
+                        java.util.List.of(new FreshSetup.Question("PAPERLESS_SECRET_KEY", "change-me", true))));
+    }
+
+    @Test
     void anAlreadySetUpProjectHasNothingToDo() throws Exception {
         var plan = FreshSetup.of(
                 ExistingSetup.read("version: 1\nservices:\n  api: { command: node server.js }\n", "x"),

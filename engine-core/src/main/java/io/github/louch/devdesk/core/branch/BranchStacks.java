@@ -80,7 +80,8 @@ public final class BranchStacks {
                         name,
                         new ServiceSpec(
                                 s.name(),
-                                new Workload.Container(c.image(), c.ports(), volumes, c.command()),
+                                new Workload.Container(
+                                        c.image(), c.ports(), volumes, c.command(), c.build(), c.entrypoint()),
                                 s.directory(),
                                 s.environment(),
                                 s.dependsOn(),

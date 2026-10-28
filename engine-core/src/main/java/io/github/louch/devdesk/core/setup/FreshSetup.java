@@ -36,6 +36,12 @@ public final class FreshSetup {
         record CreateEnv(String id, String title, String file, String example, List<Question> questions)
                 implements Step {}
 
+        /**
+         * Replaces placeholder values ("change-me") of secret-looking keys in an env file the project ships. An answer
+         * left empty keeps the value that is there.
+         */
+        record FillEnv(String id, String title, String file, List<Question> questions) implements Step {}
+
         /** Runs a command in a folder of the project ("" = the project folder): installs and image downloads. */
         record Run(String id, String title, String directory, String command) implements Step {}
 
@@ -55,8 +61,11 @@ public final class FreshSetup {
 
     private static final List<String> EXAMPLES = List.of(".example", ".sample", ".template", ".dist");
     /** Example values that are obviously not real: they become questions too. */
+    // Values that say "put a real one here": changeme, replace_with_lengthy_secure_hex (Chatwoot),
+    // replace_me_with_a_random_string (Twenty), <your key>, your-secret…
     private static final Pattern PLACEHOLDER = Pattern.compile(
-            "(?i)^(|changeme|change-me|change_me|replace[-_ ]?me|todo|xxx+|<.*>|your[-_ ].*|\\.\\.\\.)$");
+            "(?i)^(|change[-_ ]?(me|this|it)([-_ ].*)?|replace[-_ ]?(me|with|this)([-_ ].*)?|todo|tbd|fixme|xxx+|<.*>|your[-_ ].*"
+                    + "|\\.\\.\\.)$");
 
     private static final Pattern REFERENCE = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}");
 
@@ -72,9 +81,18 @@ public final class FreshSetup {
         envFiles(draft, read, steps);
         installs(draft, read, exists, steps, notes);
         Set<String> images = new LinkedHashSet<>();
-        draft.services().stream().filter(SetupDraft.Service::isContainer).forEach(s -> images.add(s.image()));
-        images.forEach(
-                image -> steps.add(new Step.Run("pull:" + image, "Download " + image, "", "docker pull " + image)));
+        // Images DevDesk builds from the project's Dockerfile aren't downloaded: they're built when they start.
+        draft.services().stream()
+                .filter(s -> s.isContainer() && !s.extras().containsKey("build"))
+                .forEach(s -> images.add(s.image()));
+        // ${TAG:-latest} in an image name: what the project's env files say, as for the containers themselves.
+        Map<String, String> values = new LinkedHashMap<>();
+        draft.envFiles().forEach(f -> read.apply(f).ifPresent(c -> values.putAll(EnvFile.parse(c))));
+        images.stream()
+                .map(image -> resolve(image, values))
+                .distinct()
+                .forEach(image ->
+                        steps.add(new Step.Run("pull:" + image, "Download " + image, "", "docker pull " + image)));
         jobs(draft, steps);
         if (steps.isEmpty()) {
             notes.add("Nothing to prepare: settings exist, packages are installed and there are no one-time jobs.");
@@ -82,15 +100,53 @@ public final class FreshSetup {
         return new Plan(steps, notes);
     }
 
+    /** The example a missing env file can be made from: {@code .env.production.sample} for .env.production. */
+    public static Optional<String> exampleOf(String file, Function<String, Optional<String>> read) {
+        return EXAMPLES.stream()
+                .map(e -> file + e)
+                .filter(f -> read.apply(f).isPresent())
+                .findFirst();
+    }
+
+    /** {@code ${VAR}}s the services use without a default: if no env file sets them, someone has to. */
+    public static Set<String> unsetVariables(List<SetupDraft.Service> services) {
+        return referencedVariables(new SetupDraft("x", List.of(), services, List.of()));
+    }
+
     /** Each env file the project reads that doesn't exist yet, from its example when there is one. */
     private static void envFiles(SetupDraft draft, Function<String, Optional<String>> read, List<Step> steps) {
         Set<String> files = new LinkedHashSet<>(draft.envFiles());
+        // A service's own env files (compose's env_file) too: Mastodon's .env.production.
+        draft.services().forEach(s -> {
+            String own = s.extras().get("env_files");
+            if (own != null) {
+                files.addAll(List.of(own.split(",")));
+            }
+        });
         // Many apps read .env themselves (dotenv), even when devdesk.yaml doesn't list it.
         if (EXAMPLES.stream().anyMatch(e -> read.apply(".env" + e).isPresent())) {
             files.add(".env");
         }
         for (String file : files) {
-            if (read.apply(file).isPresent()) {
+            Optional<String> existing = read.apply(file);
+            if (existing.isPresent()) {
+                // paperless-ngx ships PAPERLESS_SECRET_KEY=change-me, which its current image refuses to start with.
+                List<Question> placeholders = new ArrayList<>();
+                EnvFile.parse(existing.get()).forEach((key, value) -> {
+                    if (!value.isBlank()
+                            && PLACEHOLDER.matcher(value.strip()).matches()
+                            && ServiceEnvironment.looksSecret(key)) {
+                        placeholders.add(new Question(key, value.strip(), true));
+                    }
+                });
+                if (!placeholders.isEmpty()) {
+                    steps.add(new Step.FillEnv(
+                            "fill:" + file,
+                            "Replace " + placeholders.size() + " placeholder value"
+                                    + (placeholders.size() == 1 ? "" : "s") + " in " + file,
+                            file,
+                            placeholders));
+                }
                 continue;
             }
             Optional<String> example = EXAMPLES.stream()
@@ -162,6 +218,19 @@ public final class FreshSetup {
                                 + ")",
                         dir,
                         gradle + " --quiet classes"));
+            } else if (here.apply("go.mod").isPresent()) {
+                steps.add(new Step.Run(
+                        "install:" + dir,
+                        "Download " + who + " Go modules" + whose + " (in " + where + ")",
+                        dir,
+                        "go mod download"));
+            } else if (draft.services().stream()
+                    .anyMatch(s -> s.directory().equals(dir) && s.command().matches("dotnet\\b.*"))) {
+                steps.add(new Step.Run(
+                        "install:" + dir,
+                        "Download " + who + " .NET packages" + whose + " (dotnet restore, in " + where + ")",
+                        dir,
+                        "dotnet restore"));
             } else if (here.apply("requirements.txt").isPresent()) {
                 boolean venv = here.apply(".venv/pyvenv.cfg").isPresent();
                 // Ubuntu forbids pip installs into the system Python (PEP 668): a virtual environment is the way.
@@ -191,6 +260,23 @@ public final class FreshSetup {
                     }
                 }));
         jobs.forEach(job -> steps.add(new Step.Job("job:" + job, "Run " + job + " once", job)));
+    }
+
+    private static final Pattern WITH_DEFAULT = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)(?::?[-?]([^}]*))?}");
+
+    /** {@code ${VAR}}, {@code ${VAR:-default}}: the env files' value, else the default, else nothing. */
+    static String resolve(String text, Map<String, String> values) {
+        Matcher m = WITH_DEFAULT.matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String v = values.get(m.group(1));
+            if (v == null || v.isEmpty()) {
+                v = m.group(2) == null ? "" : m.group(2);
+            }
+            m.appendReplacement(out, Matcher.quoteReplacement(v));
+        }
+        m.appendTail(out);
+        return out.toString();
     }
 
     private static Set<String> referencedVariables(SetupDraft draft) {

@@ -72,6 +72,7 @@ final class ApiJson {
         m.put("root", project.root().toString());
         m.put("file", file);
         m.put("trusted", trusted);
+        m.put("warnings", project.warnings()); // allowed but probably not meant, like an unset ${VAR}
         m.put("commands", commands);
         m.put(
                 "services",

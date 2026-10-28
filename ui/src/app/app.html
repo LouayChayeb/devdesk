@@ -44,6 +44,7 @@
           }
           <div class="menu-sep"></div>
           <button class="ghost wide" (click)="pickFolder()"><dd-icon name="plus" [size]="14" /> Add project folder</button>
+          <button class="ghost wide" (click)="projectMenu.set(false); getOpen.set(true)"><dd-icon name="download" [size]="14" /> Get a project from a link…</button>
           @if (engine.project()) {
             <button class="ghost wide" (click)="editSetup()"><dd-icon name="edit" [size]="14" /> Edit setup</button>
             <button class="ghost wide" (click)="projectMenu.set(false); envOpen.set(true)"><dd-icon name="key" [size]="14" /> Environment (.env files)</button>
@@ -52,6 +53,7 @@
             }
             <button class="ghost wide" (click)="projectMenu.set(false); snapshotsOpen.set(true)"><dd-icon name="archive" [size]="14" /> Snapshots (save / restore data)</button>
             <button class="ghost wide" (click)="freshSetup()" title="For a fresh clone: .env, packages, images, one-time jobs"><dd-icon name="download" [size]="14" /> Set up (install everything)</button>
+            <button class="ghost wide" (click)="projectMenu.set(false); removeOpen.set(true)" title="Delete what DevDesk made for it: containers, volumes, images, the folder if DevDesk downloaded it"><dd-icon name="trash" [size]="14" /> Remove project…</button>
           }
           <div class="menu-sep"></div>
           <button class="ghost wide" (click)="toggleExtras()" [disabled]="engine.settings().extrasFromEnvironment" [title]="engine.settings().extrasFromEnvironment ? 'Set by DEVDESK_EXTRAS in the environment' : 'Mock server, traffic recorder, stress lab, Kafka / SQS / S3 / Elasticsearch / RabbitMQ pages, running on another machine, auto-sleep. Applies after a restart.'">
@@ -192,6 +194,7 @@
           <h2>Open a project</h2>
           <p>Choose your project's folder. If it has no <span class="mono">devdesk.yaml</span> yet, DevDesk drafts one from what's there (docker-compose.yml, package.json…). It shows every command before it runs anything.</p>
           <button class="primary" (click)="pickFolder()">Add project folder</button>
+          <button class="ghost" (click)="getOpen.set(true)"><dd-icon name="download" [size]="14" /> Get a project from a link</button>
           @if (projects().length) {
             <div class="recent">
               @for (r of projects(); track r) {
@@ -288,6 +291,14 @@
 
 @if (envOpen()) {
   <dd-env-editor (close)="envOpen.set(false)" />
+}
+
+@if (getOpen()) {
+  <dd-get-project (got)="gotProject($event)" (cancel)="getOpen.set(false)" />
+}
+
+@if (removeOpen()) {
+  <dd-remove-project (done)="removed($event)" (cancel)="removeOpen.set(false)" />
 }
 
 @if (freshFor(); as folder) {

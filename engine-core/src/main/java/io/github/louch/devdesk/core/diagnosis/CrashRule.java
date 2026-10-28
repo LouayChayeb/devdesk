@@ -46,7 +46,13 @@ public final class CrashRule implements DiagnosisRule {
                 lines.stream().filter(l -> l.stream() == StreamKind.STDERR).toList();
         List<OutputLine> shown = errors.isEmpty() ? lines : errors;
         // A crash loop prints the same error each time: show each distinct line once.
-        shown.subList(Math.max(0, shown.size() - LAST_LINES), shown.size()).stream()
+        List<OutputLine> tail = shown.subList(Math.max(0, shown.size() - LAST_LINES), shown.size());
+        // The line that says why, when the tail is only the end of a stack trace (Mastodon's "Missing
+        // `secret_key_base`" came 20 lines of "from /usr/local/bundle/..." earlier).
+        ErrorLines.cause(lines)
+                .filter(c -> tail.stream().noneMatch(l -> l.text().strip().equals(c)))
+                .ifPresent(c -> evidence.add("its error: " + c));
+        tail.stream()
                 .map(l -> (l.stream() == StreamKind.STDERR ? "stderr | " : "stdout | ") + l.text())
                 .distinct()
                 .forEach(evidence::add);

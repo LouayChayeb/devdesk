@@ -232,6 +232,48 @@ final class EngineSession implements AutoCloseable {
         return new Answer(200, Map.of("closed", project.isEmpty()));
     }
 
+    /** The open project, if any. */
+    synchronized Optional<ProjectSpec> openProject() {
+        return project.map(ProjectLoader.Result.Loaded::project);
+    }
+
+    /**
+     * Stops the open project, waits until everything really stopped, then closes it: "Remove" deletes what the
+     * project used, so nothing of it may still run. Empty when done, otherwise why not.
+     */
+    Optional<String> stopAndClose() {
+        CompletableFuture<Void> stopped;
+        synchronized (this) {
+            stopped = isRunning()
+                    ? supervisor.orElseThrow().down().thenRun(this::releaseLock)
+                    : CompletableFuture.completedFuture(null);
+        }
+        try {
+            stopped.get(SWITCH_WAIT.toSeconds(), TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            return Optional.of("the project is still stopping after " + SWITCH_WAIT.toSeconds()
+                    + " s: look at its services, then try again");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Optional.of("interrupted while stopping the project");
+        } catch (ExecutionException e) {
+            return Optional.of("stopping the project failed: " + e.getCause());
+        }
+        synchronized (this) {
+            supervisor.ifPresent(ProjectSupervisor::close);
+            supervisor = Optional.empty();
+            project = Optional.empty();
+            states.clear();
+            output.clear();
+            findings.clear();
+            rawFindings.clear();
+            Map<String, Object> none = new HashMap<>();
+            none.put("project", null); // the app shows "Open a project" again
+            broadcast("project", none);
+        }
+        return Optional.empty();
+    }
+
     /** The last {@code n} lines a service printed, oldest first (the setup shows what a one-time job said). */
     synchronized List<String> recentOutput(String service, int n) {
         List<String> lines = new ArrayList<>();

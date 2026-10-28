@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -67,7 +68,11 @@ public final class DockerConnection {
         } finally {
             closeQuietly(ping);
         }
-        return new Result.Connected(new DockerContainerRuntime(client(socket)), socket);
+        // The docker command (for builds) talks to the same Docker as DevDesk, even when it's Podman's socket.
+        Map<String, String> commandEnv = new java.util.HashMap<>(env);
+        commandEnv.put("DOCKER_HOST", "unix://" + file);
+        return new Result.Connected(
+                new DockerContainerRuntime(client(socket), commandEnv, Optional.of(PullLog.defaultFile(env))), socket);
     }
 
     private static Result stuck(Path file, String why) {

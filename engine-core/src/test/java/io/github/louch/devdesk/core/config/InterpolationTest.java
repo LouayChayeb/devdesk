@@ -46,8 +46,9 @@ class InterpolationTest {
     }
 
     @Test
-    void anUnknownVariableWithoutDefaultIsNamed() {
-        assertThat(resolve("x ${NOPE} y", Map.of())).isEqualTo(new Result.Unset("NOPE", ""));
+    void anUnsetVariableIsEmptyAndNamedForAWarning() {
+        // compose's rule: unset is "" (it warns); only ${VAR:?message} is required.
+        assertThat(resolve("x ${NOPE} y", Map.of())).isEqualTo(new Result.Resolved("x  y", java.util.List.of("NOPE")));
     }
 
     @Test

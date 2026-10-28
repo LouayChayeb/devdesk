@@ -25,7 +25,10 @@ public final class DiagnosisEngine {
                 new CrashRule(),
                 new WrapperCrashRule(),
                 new HealthRule(),
+                new SecretRule(),
                 new MissingEnvRule(),
+                new HalfMadeDatabaseRule(),
+                new LogErrorsRule(),
                 new MemoryGrowthRule(),
                 new SocketGrowthRule(),
                 new BlockedRule()));

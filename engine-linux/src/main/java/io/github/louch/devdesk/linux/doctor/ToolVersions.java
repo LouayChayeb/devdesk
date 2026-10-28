@@ -24,7 +24,9 @@ public final class ToolVersions {
             "pnpm", List.of(List.of("pnpm", "--version")),
             "yarn", List.of(List.of("yarn", "--version")),
             "mvn", List.of(List.of("mvn", "--version")),
-            "gradle", List.of(List.of("gradle", "--version", "--quiet")));
+            "gradle", List.of(List.of("gradle", "--version", "--quiet")),
+            "go", List.of(List.of("go", "version")),
+            "dotnet", List.of(List.of("dotnet", "--version")));
 
     private final Map<String, String> environment;
 

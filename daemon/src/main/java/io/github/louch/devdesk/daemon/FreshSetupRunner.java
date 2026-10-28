@@ -1,7 +1,9 @@
 package io.github.louch.devdesk.daemon;
 
+import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.setup.FreshSetup;
 import io.github.louch.devdesk.core.state.ServiceState;
+import io.github.louch.devdesk.docker.PullLog;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -49,21 +51,52 @@ final class FreshSetupRunner {
     // ---- guarded by "this" ----
     private List<Progress> steps = List.of();
     private Path folder;
+    /** The project's key, for recording the images Set up downloads. */
+    private String projectKey = "";
+
     private boolean running;
     private Optional<Process> current = Optional.empty();
     private boolean cancelled;
 
+    /** Whether an image is on this machine: asked before and after Set up downloads it. */
+    private final java.util.function.Predicate<String> imageHere;
+
     FreshSetupRunner(EngineSession session, Map<String, String> environment) {
+        this(session, environment, FreshSetupRunner::dockerHas);
+    }
+
+    /** @param imageHere answers "is this image here?" (tests give a fake Docker's answer) */
+    FreshSetupRunner(
+            EngineSession session, Map<String, String> environment, java.util.function.Predicate<String> imageHere) {
         this.session = session;
         this.environment = environment;
+        this.imageHere = imageHere;
+    }
+
+    private static boolean dockerHas(String image) {
+        try {
+            return new ProcessBuilder("docker", "image", "inspect", image)
+                            .redirectErrorStream(true)
+                            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                            .start()
+                            .waitFor()
+                    == 0;
+        } catch (IOException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /** Starts the run, unless one is already going. {@code answers} fills the env files' questions. */
-    synchronized Optional<String> start(Path root, List<FreshSetup.Step> chosen, Map<String, String> answers) {
+    synchronized Optional<String> start(
+            Path root, String projectName, List<FreshSetup.Step> chosen, Map<String, String> answers) {
         if (running) {
             return Optional.of("a setup is already running");
         }
         folder = root;
+        projectKey = ProjectSpec.keyOf(projectName, root);
         steps = chosen.stream().map(Progress::new).toList();
         running = true;
         cancelled = false;
@@ -106,9 +139,17 @@ final class FreshSetupRunner {
 
     private void runAll(List<Progress> run, Map<String, String> answers) {
         try {
+            boolean anyFailed = false;
             for (Progress p : run) {
                 if (isCancelled()) {
                     p.status = "cancelled";
+                    continue;
+                }
+                // Installs, downloads and env files don't depend on each other: one failing (Mastodon's npm install
+                // in a folder that's a duplicate) doesn't stop the rest. A one-time job needs everything before it.
+                if (anyFailed && p.step instanceof FreshSetup.Step.Job) {
+                    p.status = "skipped";
+                    p.detail = "an earlier step failed: fix it, then run Set up again";
                     continue;
                 }
                 p.status = "running";
@@ -116,7 +157,8 @@ final class FreshSetupRunner {
                 try {
                     ok = switch (p.step) {
                         case FreshSetup.Step.CreateEnv e -> createEnv(e, answers, p);
-                        case FreshSetup.Step.Run r -> command(r, p);
+                        case FreshSetup.Step.FillEnv f -> fillEnv(f, answers, p);
+                        case FreshSetup.Step.Run r -> r.id().startsWith("pull:") ? pull(r, p) : command(r, p);
                         case FreshSetup.Step.Job j -> job(j, p);
                     };
                 } catch (IOException e) {
@@ -128,10 +170,7 @@ final class FreshSetupRunner {
                     ok = false;
                 }
                 p.status = isCancelled() ? "cancelled" : ok ? "ok" : "failed";
-                if (!ok) {
-                    run.stream().filter(x -> x.status.equals("waiting")).forEach(x -> x.status = "skipped");
-                    break;
-                }
+                anyFailed |= !ok;
             }
         } finally {
             synchronized (this) {
@@ -139,6 +178,27 @@ final class FreshSetupRunner {
                 current = Optional.empty();
             }
         }
+    }
+
+    private boolean fillEnv(FreshSetup.Step.FillEnv f, Map<String, String> answers, Progress p) throws IOException {
+        Path file = folder.resolve(f.file());
+        Map<String, String> values = new LinkedHashMap<>();
+        f.questions().forEach(q -> {
+            String answer = answers.getOrDefault(q.key(), "");
+            if (!answer.isBlank()) {
+                values.put(q.key(), answer);
+            }
+        });
+        if (!values.isEmpty()) {
+            Files.writeString(
+                    file,
+                    FreshSetup.envContent(Files.readString(file, StandardCharsets.UTF_8), values),
+                    StandardCharsets.UTF_8);
+        }
+        long kept = f.questions().size() - values.size();
+        p.detail = "updated " + f.file()
+                + (kept > 0 ? " (" + kept + " left as " + (kept == 1 ? "it was" : "they were") + ")" : "");
+        return true;
     }
 
     private boolean createEnv(FreshSetup.Step.CreateEnv e, Map<String, String> answers, Progress p) throws IOException {
@@ -163,6 +223,20 @@ final class FreshSetupRunner {
                         ? " (" + empty + " value" + (empty == 1 ? "" : "s") + " left empty: fill them in later)"
                         : "");
         return true;
+    }
+
+    /**
+     * A download step ("pull:<image>"): run like any command, then recorded as DevDesk's for this project only when
+     * the image wasn't on the machine before, so Remove deletes what Set up brought and never an image the user had.
+     */
+    private boolean pull(FreshSetup.Step.Run r, Progress p) throws IOException, InterruptedException {
+        String image = r.id().substring("pull:".length());
+        boolean before = imageHere.test(image);
+        boolean ok = command(r, p);
+        if (ok && !before && imageHere.test(image)) {
+            new PullLog(Optional.of(PullLog.defaultFile(environment))).record(image, projectKey);
+        }
+        return ok;
     }
 
     private boolean command(FreshSetup.Step.Run r, Progress p) throws IOException, InterruptedException {

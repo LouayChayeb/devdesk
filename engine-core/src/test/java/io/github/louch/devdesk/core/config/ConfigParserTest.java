@@ -127,12 +127,21 @@ class ConfigParserTest {
     }
 
     @Test
-    void missingVariableExplainsTheWayOut() {
-        assertThat(errors("""
+    void anUnsetVariableIsEmptyAndSaidLikeComposeDoesButARequiredOneStops() throws Exception {
+        // Like compose: ${API_KEY} unset is "", with a warning. Plausible's ${BASE_URL} used to block the wizard.
+        ProjectSpec project = parse("""
                 version: 1
                 services:
                   api: { command: "node server.js --key ${API_KEY}" }
-                """)).contains("variable ${API_KEY} is not set").contains("${API_KEY:-value}");
+                """);
+
+        assertThat(project.services().get("api").workload()).isEqualTo(new Workload.Command("node server.js --key "));
+        assertThat(project.warnings()).singleElement().asString().contains("${API_KEY} isn't set, so it's empty");
+        assertThat(errors("""
+                version: 1
+                services:
+                  api: { command: "node server.js --key ${API_KEY:?the API key}" }
+                """)).contains("variable ${API_KEY} is required and not set (\"the API key\")");
     }
 
     @Test
@@ -184,6 +193,52 @@ class ConfigParserTest {
         assertThat(db.environment()).containsEntry("POSTGRES_PASSWORD", "dev");
         assertThat(db.ports()).containsExactly(5432, 8080, 6379); // checked for conflicts before starting
         assertThat(db.health()).isInstanceOf(HealthCheckSpec.Docker.class);
+    }
+
+    @Test
+    void aContainerCanBeBuiltFromTheProjectsDockerfile() throws Exception {
+        ProjectSpec project = parse("""
+                version: 1
+                name: My Shop
+                services:
+                  api:
+                    container:
+                      build: ./backend
+                      ports: ["8000:8000"]
+                  worker:
+                    container:
+                      image: shop/worker:dev
+                      build: { context: ., dockerfile: worker/Dockerfile.dev }
+                """);
+
+        // Without image:, the built image is named like compose names it: "<project>-<service>".
+        assertThat(project.services().get("api").workload())
+                .isEqualTo(new Workload.Container(
+                        "my-shop-api",
+                        List.of(new Workload.PortMapping("127.0.0.1", 8000, 8000)),
+                        List.of(),
+                        Optional.empty(),
+                        Optional.of(new Workload.Build(Path.of("/work/shop/backend"), "Dockerfile"))));
+        assertThat(((Workload.Container) project.services().get("worker").workload()).build())
+                .contains(new Workload.Build(ROOT, "worker/Dockerfile.dev"));
+        assertThat(project.services().get("api").workload().describe())
+                .isEqualTo("container my-shop-api (built from /work/shop/backend) ports [8000:8000]");
+    }
+
+    @Test
+    void aUdpPortIsPublishedAsUdpAndIsntCheckedLikeATcpOne() throws Exception {
+        ProjectSpec project = parse("""
+                version: 1
+                services:
+                  jaeger: { container: { image: jaegertracing/all-in-one, ports: ["16686:16686", "6831:6831/udp"] } }
+                """);
+
+        var jaeger = project.services().get("jaeger");
+        assertThat(((Workload.Container) jaeger.workload()).ports())
+                .containsExactly(
+                        new Workload.PortMapping("127.0.0.1", 16686, 16686),
+                        new Workload.PortMapping("127.0.0.1", 6831, 6831, true));
+        assertThat(jaeger.ports()).containsExactly(16686); // the busy-port check is about TCP listeners
     }
 
     @Test

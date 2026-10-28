@@ -38,6 +38,10 @@ public final class ToolNeeds {
     private static final Pattern REQUIRES_PYTHON = Pattern.compile("requires-python\\s*=\\s*[\"']([^\"']+)[\"']");
     private static final Pattern RUNTIME_TXT = Pattern.compile("python-(\\d+(?:\\.\\d+){0,2})");
     private static final Pattern SDKMAN_JAVA = Pattern.compile("(?m)^java=(\\d+)");
+    private static final Pattern GO_TOOLCHAIN = Pattern.compile("(?m)^toolchain\\s+go(\\d+(?:\\.\\d+){0,2})");
+    private static final Pattern GO_LINE = Pattern.compile("(?m)^go\\s+(\\d+(?:\\.\\d+){0,2})");
+    private static final Pattern TARGET_FRAMEWORK =
+            Pattern.compile("<TargetFramework>net(\\d+\\.\\d+)</TargetFramework>");
     private static final JsonMapper JSON = JsonMapper.shared();
 
     private ToolNeeds() {}
@@ -74,6 +78,8 @@ public final class ToolNeeds {
                         needs.add(new Need(program, s.name(), Optional.empty(), "devdesk.yaml"));
                     }
                 }
+                case "go" -> needs.add(go(s.name(), here, where));
+                case "dotnet" -> needs.add(dotnet(s.name(), s.directory(), here, where));
                 default -> {
                     // other programs: "program-missing" already checks they exist
                 }
@@ -132,6 +138,39 @@ public final class ToolNeeds {
             }
         }
         return new Need("java", service, Optional.empty(), "devdesk.yaml");
+    }
+
+    /** go.mod's "toolchain go1.22.3" if it has one (the exact Go it wants), else its "go 1.21" line (a minimum). */
+    private static Need go(String service, Function<String, Optional<String>> here, Function<String, String> where) {
+        Optional<String> mod = here.apply("go.mod");
+        Optional<String> version = mod.flatMap(t -> first(GO_TOOLCHAIN, t))
+                .or(() -> mod.flatMap(t -> first(GO_LINE, t)))
+                .map(v -> ">=" + v);
+        return new Need("go", service, version, version.isPresent() ? where.apply("go.mod") : "devdesk.yaml");
+    }
+
+    /** global.json's sdk.version, else the TargetFramework (net8.0) of the project file named like its folder. */
+    private static Need dotnet(
+            String service, Path directory, Function<String, Optional<String>> here, Function<String, String> where) {
+        Optional<String> global = here.apply("global.json").flatMap(g -> {
+            try {
+                String v = JSON.readTree(g).path("sdk").path("version").asString("");
+                return v.isBlank() ? Optional.empty() : Optional.of(v);
+            } catch (JacksonException e) {
+                return Optional.empty();
+            }
+        });
+        if (global.isPresent()) {
+            return new Need("dotnet", service, global.map(v -> ">=" + v), where.apply("global.json"));
+        }
+        String csproj =
+                (directory.getFileName() == null ? "" : directory.getFileName().toString()) + ".csproj";
+        Optional<String> framework = here.apply(csproj).flatMap(t -> first(TARGET_FRAMEWORK, t));
+        return new Need(
+                "dotnet",
+                service,
+                framework.map(v -> ">=" + v),
+                framework.isPresent() ? where.apply(csproj) : "devdesk.yaml");
     }
 
     /** The first group that matched, of a pattern that may have several alternatives. */

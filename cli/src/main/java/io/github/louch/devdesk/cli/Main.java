@@ -61,6 +61,16 @@ public final class Main {
                         "run", new RunCommand(runtime, Path.of("").toAbsolutePath(), env, System.out, System.err))
                 .addSubcommand("up", new UpCommand(engine, env, System.out, System.err))
                 .addSubcommand("trust", new TrustCommand(env, trust, stdin, System.out, System.err))
+                .addSubcommand(
+                        "get",
+                        new GetCommand(
+                                env,
+                                trust,
+                                stdin,
+                                System.out,
+                                System.err,
+                                new UpCommand(engine, env, System.out, System.err)))
+                .addSubcommand("remove", new RemoveCommand(env, trust, stdin, System.out, System.err))
                 .addSubcommand("history", new HistoryCommand(env, clock, System.out, System.err))
                 .addSubcommand(
                         "ps",

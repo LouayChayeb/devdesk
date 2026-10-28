@@ -68,6 +68,36 @@ class SetupYamlTest {
     }
 
     @Test
+    void aBuiltContainerIsWrittenWithItsBuildAndReadBack() throws Exception {
+        var web = new SetupDraft.Service(
+                "web",
+                "container",
+                "",
+                "",
+                "shop-web",
+                List.of("8000:8000"),
+                List.of(),
+                Map.of(),
+                Map.of(),
+                SetupDraft.Health.tcp(8000),
+                "no",
+                "docker-compose.yml",
+                List.of(),
+                Map.of("build", "web", "build.dockerfile", "Dockerfile.dev", "native.command", "npm run dev"));
+
+        String yaml = SetupYaml.write(new SetupDraft("shop", List.of(), List.of(web), List.of()));
+
+        assertThat(yaml).contains("      build: { context: ./web, dockerfile: Dockerfile.dev }\n");
+        assertThat(yaml).doesNotContain("native"); // the wizard's alternative isn't part of the file
+        var parsed = ConfigParser.parse(yaml, Path.of("/shop"), Map.of(), f -> Optional.empty());
+        assertThat(((Workload.Container) parsed.services().get("web").workload()).build())
+                .contains(new Workload.Build(Path.of("/shop/web"), "Dockerfile.dev"));
+        assertThat(ExistingSetup.read(yaml, "shop").services().getFirst().extras())
+                .containsEntry("build", "./web")
+                .containsEntry("build.dockerfile", "Dockerfile.dev");
+    }
+
+    @Test
     void editSetupReadsBackWhatWasWrittenWithVariablesUnresolved() throws Exception {
         String yaml = SetupYaml.write(draft());
 

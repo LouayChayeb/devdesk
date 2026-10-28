@@ -90,20 +90,91 @@ class ComposeImportTest {
     }
 
     @Test
-    void aBuiltServiceRunsOnThisMachineAndReachesTheOthersThroughTheHost() {
+    void aBuiltServiceIsBuiltFromItsDockerfileAndReachesTheOthersByName() {
         var api = card("api");
 
-        assertThat(api.kind()).isEqualTo("command");
-        assertThat(api.command()).isEqualTo("npm run dev");
-        assertThat(api.directory()).isEqualTo("api");
-        assertThat(api.ports()).containsExactly("3000");
+        // A container by default: the project's Dockerfile installs what it needs, nothing lands on this machine.
+        assertThat(api.kind()).isEqualTo("container");
+        assertThat(api.image()).isEqualTo("myshop-api"); // compose's own name, so "docker compose build" results count
+        assertThat(api.extras()).containsEntry("build", "api");
+        assertThat(api.ports()).containsExactly("3000:3000");
         assertThat(api.environment())
-                .containsEntry("DATABASE_URL", "postgres://postgres:secret@127.0.0.1:5432/shop")
-                .containsEntry("REDIS_HOST", "127.0.0.1");
+                .containsEntry("DATABASE_URL", "postgres://postgres:secret@db:5432/shop")
+                .containsEntry("REDIS_HOST", "cache");
         assertThat(api.dependsOn()).containsExactly(Map.entry("db", "healthy"), Map.entry("cache", "started"));
         assertThat(api.restart()).isEqualTo("always");
-        assertThat(api.health()).isEqualTo(SetupDraft.Health.tcp(3000));
-        assertThat(result.envFiles()).containsExactly(".env");
+        assertThat(api.notes()).anyMatch(n -> n.contains("DevDesk builds its image from ./api/Dockerfile"));
+        // compose's env_file is this service's own settings, not the whole project's (like compose).
+        assertThat(api.extras()).containsEntry("env_files", ".env");
+        assertThat(result.envFiles()).isEmpty();
+    }
+
+    @Test
+    void howToRunABuiltServiceOnThisMachineInsteadIsKeptOnTheCard() {
+        var api = card("api");
+
+        // One click in the wizard: the command, its folder and port, and the settings that differ on this machine.
+        assertThat(api.extras())
+                .containsEntry("native.command", "npm run dev")
+                .containsEntry("native.directory", "api")
+                .containsEntry("native.ports", "3000")
+                .containsEntry("native.health.type", "tcp")
+                .containsEntry("native.health.target", "3000")
+                .containsEntry("native.env.DATABASE_URL", "postgres://postgres:secret@127.0.0.1:5432/shop")
+                .containsEntry("native.env.REDIS_HOST", "127.0.0.1");
+    }
+
+    @Test
+    void switchingABuiltServiceToACommandAndBackLosesNothing() {
+        var api = card("api");
+
+        var local = api.switchTo("command");
+
+        assertThat(local.kind()).isEqualTo("command");
+        assertThat(local.command()).isEqualTo("npm run dev");
+        assertThat(local.directory()).isEqualTo("api");
+        assertThat(local.ports()).containsExactly("3000");
+        assertThat(local.health()).isEqualTo(SetupDraft.Health.tcp(3000));
+        assertThat(local.environment()).containsEntry("REDIS_HOST", "127.0.0.1");
+
+        var back = local.switchTo("container");
+
+        assertThat(back.kind()).isEqualTo("container");
+        assertThat(back.command()).isEmpty();
+        assertThat(back.ports()).containsExactly("3000:3000");
+        assertThat(back.environment()).isEqualTo(api.environment());
+        assertThat(back.extras()).containsEntry("build", "api");
+        assertThat(back.switchTo("command").command()).isEqualTo("npm run dev");
+    }
+
+    @Test
+    void composesHealthcheckTimingIsKeptAndSeveralPortsAreNotGuessed() {
+        var r = ComposeImport.read("""
+                services:
+                  server:
+                    image: twentycrm/twenty:v2.52.0
+                    ports: ["3000:3000"]
+                    healthcheck:
+                      test: curl --fail http://localhost:3000/healthz
+                      interval: 5s
+                      timeout: 5s
+                      retries: 20
+                  jaeger:
+                    image: jaegertracing/all-in-one
+                    ports: ["5778:5778", "16686:16686", "6831:6831/udp"]
+                """, "twenty", "twenty", dir -> Optional.empty());
+        var server = r.services().get(0);
+        var jaeger = r.services().get(1);
+
+        // Twenty's server boots for ~100 s: 20 retries 5 s apart, as compose gives it.
+        assertThat(server.extras())
+                .containsEntry("health.interval", "5s")
+                .containsEntry("health.timeout", "5s")
+                .containsEntry("health.retries", "20");
+        // jaeger answers on 16686, not on 5778 (its first port): no guess, and the card says why.
+        assertThat(jaeger.health()).isEqualTo(SetupDraft.Health.PROCESS);
+        assertThat(jaeger.notes()).anyMatch(n -> n.contains("only checks that it runs"));
+        assertThat(jaeger.ports()).containsExactly("5778:5778", "16686:16686", "6831:6831/udp");
     }
 
     @Test
@@ -206,7 +277,8 @@ class ComposeImportTest {
 
         assertThat(db.ports()).containsExactly("5432:5432");
         assertThat(db.notes()).anyMatch(n -> n.contains("publishes its usual port 5432 on 127.0.0.1"));
-        assertThat(vote.environment()).containsEntry("DB_HOST", "127.0.0.1");
+        assertThat(vote.environment()).containsEntry("DB_HOST", "db"); // the project's network knows "db"
+        assertThat(vote.extras()).containsEntry("native.env.DB_HOST", "127.0.0.1");
     }
 
     @Test
@@ -233,8 +305,11 @@ class ComposeImportTest {
                 .findFirst()
                 .orElseThrow();
 
+        // In the container, compose's command replaces the image's CMD; on this machine it is the command too.
         assertThat(worker.command()).isEqualTo("celery -A shop worker -l info");
-        assertThat(web.command()).isEqualTo("node server.js");
+        assertThat(worker.extras()).containsEntry("native.command", "celery -A shop worker -l info");
+        assertThat(web.command()).isEmpty();
+        assertThat(web.extras()).containsEntry("native.command", "node server.js");
     }
 
     @Test
@@ -262,7 +337,7 @@ class ComposeImportTest {
     }
 
     @Test
-    void aSecretPathInTheEnvironmentPointsAtTheSecretsFileForACommand() {
+    void aSecretPathPointsAtTheSecretsFileWhenItRunsOnThisMachine() {
         // awesome-compose react-express-mysql: the backend, run on this machine, reads DATABASE_PASSWORD as a file.
         var r = ComposeImport.read("""
                 services:
@@ -279,10 +354,12 @@ class ComposeImportTest {
                 """, "shop", "shop", dir -> Optional.empty());
         var backend = r.services().getFirst();
 
-        assertThat(backend.environment())
-                .containsEntry("DATABASE_PASSWORD", "../db/password.txt")
-                .containsEntry("OTHER", "/run/secrets/db-password-old");
-        assertThat(backend.notes()).anyMatch(n -> n.contains("now names the file ./db/password.txt"));
+        // In its container the secret is mounted where compose puts it; on this machine it's the file itself.
+        assertThat(backend.environment()).containsEntry("DATABASE_PASSWORD", "/run/secrets/db-password");
+        assertThat(backend.volumes()).contains("./db/password.txt:/run/secrets/db-password:ro");
+        assertThat(backend.extras())
+                .containsEntry("native.env.DATABASE_PASSWORD", "../db/password.txt")
+                .doesNotContainKey("native.env.OTHER");
     }
 
     @Test

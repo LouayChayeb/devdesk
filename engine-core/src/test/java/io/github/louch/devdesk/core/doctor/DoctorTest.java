@@ -38,6 +38,41 @@ class DoctorTest {
     }
 
     @Test
+    void goAndDotnetVersionsComeFromTheirOwnFiles() throws Exception {
+        var project = ConfigParser.parse("""
+                version: 1
+                services:
+                  api: { command: go run ., directory: api }
+                  worker: { command: dotnet run, directory: worker }
+                  web: { container: { build: ./web, ports: ["8080:80"] } }
+                """, Path.of("/p"), Map.of(), f -> Optional.empty());
+
+        var report = Doctor.check(
+                project,
+                facts(
+                        Map.of(
+                                "/p/api/go.mod", "module shop\n\ngo 1.21\n\ntoolchain go1.23.4\n",
+                                "/p/worker/worker.csproj", "<TargetFramework>net9.0</TargetFramework>"),
+                        Map.of("go", "go version go1.22.2 linux/amd64", "dotnet", "8.0.132"),
+                        50 * Doctor.GIB),
+                List.of());
+
+        assertThat(report.problems())
+                .extracting(Finding::title)
+                .contains("Go 1.22.2 found, api needs >=1.23.4", ".NET SDK 8.0.132 found, worker needs >=9.0");
+        assertThat(report.problems().stream()
+                        .filter(f -> f.title().startsWith("Go "))
+                        .findFirst()
+                        .orElseThrow()
+                        .actions())
+                .singleElement()
+                .asString()
+                .startsWith("install Go 1.23.4 from https://go.dev/dl/");
+        // An image built from the project's Dockerfile is no download to worry about.
+        assertThat(report.passed()).contains("web's image is built from Dockerfile when it first starts");
+    }
+
+    @Test
     void theWrongVersionsAreNamedWithWhereTheRequirementComesFrom() throws Exception {
         var report = Doctor.check(
                 project(),

@@ -7,15 +7,14 @@ import io.github.louch.devdesk.core.setup.DatabaseTemplates;
 import io.github.louch.devdesk.core.setup.EnvReport;
 import io.github.louch.devdesk.core.setup.ExistingSetup;
 import io.github.louch.devdesk.core.setup.FolderScan;
+import io.github.louch.devdesk.core.setup.FreePorts;
 import io.github.louch.devdesk.core.setup.FreshSetup;
 import io.github.louch.devdesk.core.setup.SetupDraft;
 import io.github.louch.devdesk.core.setup.SetupYaml;
 import io.github.louch.devdesk.docker.DockerConnection;
+import io.github.louch.devdesk.linux.project.DiskFolder;
 import io.github.louch.devdesk.linux.project.ProjectLoader;
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,16 +33,12 @@ import java.util.function.Supplier;
 import java.util.random.RandomGenerator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 /**
  * The "Add project" wizard's engine side: scans a folder, adds databases, checks the draft with DevDesk's own parser,
  * test-runs it without saving, and finally writes devdesk.yaml. The app only shows what this class answers.
  */
 final class SetupWorkbench {
-
-    /** Bigger files aren't build files: a 5 MB "package.json" is someone's data. */
-    private static final long MAX_FILE = 1024 * 1024;
 
     private static final String DRAFT_SHAPE =
             "send {\"path\": \"/folder\", \"draft\": {\"name\", \"services\": [...]}}";
@@ -53,6 +48,7 @@ final class SetupWorkbench {
     private final Map<String, String> environment;
     private final RandomGenerator random;
     private final FreshSetupRunner runner;
+    private final GetWorkbench get;
 
     SetupWorkbench(
             EngineSession session,
@@ -64,6 +60,12 @@ final class SetupWorkbench {
         this.environment = environment;
         this.random = random;
         this.runner = new FreshSetupRunner(session, environment);
+        this.get = new GetWorkbench(session, docker, environment);
+    }
+
+    /** "Get it running" (clone from a link) and "Remove". */
+    GetWorkbench get() {
+        return get;
     }
 
     /** Step 1: an existing devdesk.yaml as cards ("Edit setup"), or a scan of the folder. */
@@ -101,10 +103,16 @@ final class SetupWorkbench {
                         + "), so the folder was scanned");
             }
         }
-        FolderScan.Result scan = FolderScan.scan(folder(root), root.toString(), running);
+        FolderScan.Result scan = FolderScan.scan(new DiskFolder(root), root.toString(), running);
         found.addAll(0, scan.found());
         answer.put("mode", Files.isRegularFile(existing) ? "edit" : "new");
-        answer.put("draft", SetupJson.draft(scan.draft()));
+        // A new setup avoids ports other programs hold; "Edit setup" keeps what the user wrote.
+        answer.put(
+                "draft",
+                SetupJson.draft(
+                        Files.isRegularFile(existing)
+                                ? scan.draft()
+                                : FreePorts.apply(scan.draft(), SetupWorkbench::portFree)));
         answer.put("found", found);
         answer.put(
                 "suggestions",
@@ -170,6 +178,22 @@ final class SetupWorkbench {
                         400, ApiJson.error("unknown kind \"" + kind + "\": use one of " + DatabaseTemplates.KINDS)));
     }
 
+    /** A card switched between "runs on this machine" and "runs in a container"; the engine knows both ways. */
+    EngineSession.Answer switchKind(Map<?, ?> body) {
+        Optional<SetupDraft> draft = SetupJson.readDraft(body.get("draft"));
+        if (draft.isEmpty()
+                || !(body.get("index") instanceof Number index)
+                || !(body.get("kind") instanceof String kind)
+                || index.intValue() < 0
+                || index.intValue() >= draft.get().services().size()) {
+            return new EngineSession.Answer(
+                    400, ApiJson.error("send {\"draft\": {...}, \"index\": 0, \"kind\": \"command\"}"));
+        }
+        return new EngineSession.Answer(
+                200,
+                SetupJson.service(draft.get().services().get(index.intValue()).switchTo(kind)));
+    }
+
     /**
      * Steps 4 and 6: the devdesk.yaml the draft becomes, checked by the same parser that opens projects, plus the
      * settings report and the commands it would run (shown before the test run, like the trust prompt).
@@ -184,7 +208,7 @@ final class SetupWorkbench {
         String yaml = SetupYaml.write(draft.get());
         Map<String, Object> answer = new LinkedHashMap<>();
         answer.put("yaml", yaml);
-        switch (ProjectLoader.loadText(root, yaml, environment)) {
+        switch (ProjectLoader.loadForSetup(root, yaml, environment)) {
             case ProjectLoader.Result.Loaded l -> {
                 answer.put("problems", List.of());
                 answer.put("commands", ProjectLoader.commands(l.project()));
@@ -199,7 +223,9 @@ final class SetupWorkbench {
                 answer.put("commands", List.of());
             }
         }
-        answer.put("env", SetupJson.envReport(EnvReport.of(draft.get(), f -> read(root, f), environment.keySet())));
+        answer.put(
+                "env",
+                SetupJson.envReport(EnvReport.of(draft.get(), new DiskFolder(root)::read, environment.keySet())));
         answer.put("exists", Files.isRegularFile(root.resolve(ConfigParser.FILE_NAME)));
         return new EngineSession.Answer(200, answer);
     }
@@ -297,7 +323,7 @@ final class SetupWorkbench {
                 }
             });
         }
-        return runner.start(folder.get(), chosen, answers)
+        return runner.start(folder.get(), draft.get().name(), chosen, answers)
                 .map(problem -> new EngineSession.Answer(409, ApiJson.error(problem)))
                 .orElse(new EngineSession.Answer(202, runner.status()));
     }
@@ -325,7 +351,9 @@ final class SetupWorkbench {
 
     private static FreshSetup.Plan plan(Path root, SetupDraft draft) {
         return FreshSetup.of(
-                draft, f -> read(root, f), f -> Files.exists(root.resolve(f).normalize()));
+                draft,
+                new DiskFolder(root)::read,
+                f -> Files.exists(root.resolve(f).normalize()));
     }
 
     /** Step 5: runs the draft without saving it. The app follows the services through the usual events. */
@@ -357,7 +385,7 @@ final class SetupWorkbench {
             return new EngineSession.Answer(409, ApiJson.error("stop the test run first: services are still running"));
         }
         String yaml = SetupYaml.write(draft.get());
-        if (ProjectLoader.loadText(root, yaml, environment) instanceof ProjectLoader.Result.Invalid i) {
+        if (ProjectLoader.loadForSetup(root, yaml, environment) instanceof ProjectLoader.Result.Invalid i) {
             return new EngineSession.Answer(
                     400,
                     Map.of(
@@ -427,69 +455,7 @@ final class SetupWorkbench {
         return Files.isDirectory(folder) ? Optional.of(folder) : Optional.empty();
     }
 
-    /** The project folder for the scan. Reads stay inside it, and only small files are read. */
-    private static FolderScan.Folder folder(Path root) {
-        return new FolderScan.Folder() {
-            @Override
-            public String name() {
-                return root.getFileName() == null
-                        ? "project"
-                        : root.getFileName().toString();
-            }
-
-            @Override
-            public List<String> subfolders() {
-                try (Stream<Path> list = Files.list(root)) {
-                    return list.filter(Files::isDirectory)
-                            .map(p -> p.getFileName().toString())
-                            .filter(n -> !n.startsWith("."))
-                            .toList();
-                } catch (IOException e) {
-                    return List.of();
-                }
-            }
-
-            @Override
-            public List<String> files() {
-                try (Stream<Path> list = Files.list(root)) {
-                    return list.filter(Files::isRegularFile)
-                            .map(p -> p.getFileName().toString())
-                            .toList();
-                } catch (IOException e) {
-                    return List.of();
-                }
-            }
-
-            @Override
-            public Optional<String> read(String relativePath) {
-                return SetupWorkbench.read(root, relativePath);
-            }
-        };
-    }
-
-    private static Optional<String> read(Path root, String relativePath) {
-        Path file = root.resolve(relativePath).normalize();
-        try {
-            if (!file.startsWith(root) || !Files.isRegularFile(file) || Files.size(file) > MAX_FILE) {
-                return Optional.empty();
-            }
-            return Optional.of(Files.readString(file));
-        } catch (IOException e) {
-            return Optional.empty(); // binary or unreadable: not a build file
-        }
-    }
-
-    /**
-     * Whether nothing listens on {@code port} yet. Binding on all addresses fails both for a program on 127.0.0.1 and
-     * for Docker's proxy on 0.0.0.0.
-     */
     static boolean portFree(int port) {
-        try (ServerSocket s = new ServerSocket()) {
-            s.setReuseAddress(false);
-            s.bind(new InetSocketAddress(InetAddress.getByName("0.0.0.0"), port));
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        return DiskFolder.portFree(port);
     }
 }

@@ -478,6 +478,18 @@ public final class ProjectSupervisor implements AutoCloseable {
     private boolean startWhatCanStart() {
         boolean changed = false;
         for (Service s : services.values()) {
+            // Blocked by a dependency that has since recovered (Twenty's server failed its first health checks while
+            // it set up its database, then became healthy): it waits again, and starts once everything is ready.
+            if (s.state instanceof ServiceState.Blocked b
+                    && !keptStopped.contains(s.spec.name())
+                    && dependencyVerdict(s)
+                            .filter(v -> v instanceof ServiceEvent.DependenciesReady)
+                            .isPresent()) {
+                apply(s, new ServiceEvent.StartRequested(), b.cause() + " recovered: starting it now");
+                changed = true;
+            }
+        }
+        for (Service s : services.values()) {
             if (s.state instanceof ServiceState.WaitingDeps && !keptStopped.contains(s.spec.name())) {
                 Optional<ServiceEvent> verdict = dependencyVerdict(s);
                 if (verdict.isPresent()) {

@@ -221,10 +221,11 @@ export class SetupWizard implements OnInit {
     this.suggestions.update((list) => list.filter((x) => x !== s));
   }
 
-  setKind(i: number, kind: 'command' | 'container'): void {
-    const s = this.draft().services[i];
-    const health = kind === 'command' && s.health.type === 'docker' ? { ...s.health, type: 'process' } : s.health;
-    this.patch(i, { kind, health });
+  /** The engine switches the card: it knows how a built service runs on this machine, and back. */
+  async setKind(i: number, kind: 'command' | 'container'): Promise<void> {
+    if (this.draft().services[i].kind === kind) return;
+    const r = await this.engine.setupSwitch(this.draft(), i, kind);
+    if (r.ok) this.patch(i, r.value);
   }
 
   list(text: string): string[] {

@@ -115,6 +115,59 @@ public record SetupDraft(String name, List<String> envFiles, List<Service> servi
                     .toList();
         }
 
+        /**
+         * The same service run the other way: {@code command} (on this machine) or {@code container}. What the card
+         * had is kept in {@code extras} ("container.command", "native.env.DB_HOST"…), and what the other way needs
+         * comes from there: for a service compose builds, the scan put the command that runs it here.
+         */
+        public Service switchTo(String next) {
+            if (next.equals(kind) || !(next.equals("command") || next.equals("container"))) {
+                return this;
+            }
+            String from = isContainer() ? "container" : "native";
+            String to = next.equals("container") ? "container" : "native";
+            Map<String, String> x = new LinkedHashMap<>(extras);
+            x.keySet().removeIf(k -> k.startsWith(from + "."));
+            x.put(from + ".command", command);
+            x.put(from + ".directory", directory);
+            x.put(from + ".ports", String.join(",", ports));
+            x.put(from + ".health.type", health.type());
+            x.put(from + ".health.target", health.target());
+            environment.forEach((k, v) -> x.put(from + ".env." + k, v));
+
+            Map<String, String> env = new LinkedHashMap<>(environment);
+            x.forEach((k, v) -> {
+                if (k.startsWith(to + ".env.")) {
+                    env.put(k.substring((to + ".env.").length()), v);
+                }
+            });
+            List<String> nextPorts = x.containsKey(to + ".ports")
+                    ? java.util.Arrays.stream(x.get(to + ".ports").split(","))
+                            .filter(p -> !p.isBlank())
+                            .toList()
+                    : hostPorts().stream()
+                            .map(p -> next.equals("container") ? p + ":" + p : String.valueOf(p))
+                            .toList();
+            Health nextHealth = x.containsKey(to + ".health.type")
+                    ? new Health(x.get(to + ".health.type"), x.getOrDefault(to + ".health.target", ""), "")
+                    : next.equals("command") && health.type().equals("docker") ? Health.PROCESS : health;
+            return new Service(
+                    name,
+                    next,
+                    x.getOrDefault(to + ".command", ""),
+                    x.getOrDefault(to + ".directory", ""),
+                    image,
+                    nextPorts,
+                    volumes,
+                    env,
+                    dependsOn,
+                    nextHealth,
+                    restart,
+                    origin,
+                    notes,
+                    x);
+        }
+
         public Service withDependsOn(Map<String, String> next) {
             return new Service(
                     name,

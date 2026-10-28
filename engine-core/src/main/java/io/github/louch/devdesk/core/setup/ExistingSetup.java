@@ -74,6 +74,10 @@ public final class ExistingSetup {
         Map<String, String> env = new LinkedHashMap<>(map(entry(s, "environment")));
         Map<String, String> extras = new LinkedHashMap<>();
         entry(s, "stop_grace_period").flatMap(ComposeImport::text).ifPresent(g -> extras.put("stop_grace_period", g));
+        List<String> ownEnvFiles = strings(entry(s, "env_files"));
+        if (!ownEnvFiles.isEmpty()) {
+            extras.put("env_files", String.join(",", ownEnvFiles));
+        }
         SetupDraft.Health health =
                 entry(s, "health").map(h -> health(h, extras)).orElse(SetupDraft.Health.PROCESS);
         Map<String, String> deps = new LinkedHashMap<>();
@@ -93,6 +97,19 @@ public final class ExistingSetup {
         if (container.isPresent()) {
             YamlNode c = container.get();
             env.putAll(map(entry(c, "environment")));
+            entry(c, "entrypoint").flatMap(ComposeImport::text).ifPresent(e -> extras.put("entrypoint", e));
+            entry(c, "build").ifPresent(b -> {
+                if (b instanceof YamlNode.Mapping) {
+                    extras.put(
+                            "build",
+                            entry(b, "context").flatMap(ComposeImport::text).orElse("."));
+                    entry(b, "dockerfile")
+                            .flatMap(ComposeImport::text)
+                            .ifPresent(f -> extras.put("build.dockerfile", f));
+                } else {
+                    text(b).ifPresent(ctx -> extras.put("build", ctx));
+                }
+            });
             return new SetupDraft.Service(
                     name,
                     "container",

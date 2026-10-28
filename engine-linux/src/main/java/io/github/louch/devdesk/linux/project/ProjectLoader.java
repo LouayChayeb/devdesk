@@ -6,6 +6,7 @@ import io.github.louch.devdesk.core.config.ConfigProblem;
 import io.github.louch.devdesk.core.project.HealthCheckSpec;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.Workload;
+import io.github.louch.devdesk.core.setup.FreshSetup;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 /** Reads and validates a devdesk.yaml file. Every failure comes back as a plain-words result, never an exception. */
 public final class ProjectLoader {
@@ -55,6 +57,25 @@ public final class ProjectLoader {
      */
     public static Result loadText(Path folder, String content, Map<String, String> env) {
         return loadAt(folder.toAbsolutePath().normalize().resolve(ConfigParser.FILE_NAME), content, env);
+    }
+
+    /**
+     * The setup wizard's check of a devdesk.yaml before it's saved: an env file that doesn't exist yet but that Set
+     * up will make (from its example, or .env for the ${VAR}s it asks for) reads as that example, so the file can be
+     * saved and Set up can run. Anything else missing is still a mistake.
+     */
+    public static Result loadForSetup(Path folder, String content, Map<String, String> env) {
+        Path root = folder.toAbsolutePath().normalize();
+        Function<String, Optional<String>> read = name -> read(root.resolve(name))
+                .or(() -> FreshSetup.exampleOf(name, n -> read(root.resolve(n))).flatMap(e -> read(root.resolve(e))))
+                .or(() -> name.equals(".env") ? Optional.of("") : Optional.empty());
+        try {
+            ProjectSpec project = ConfigParser.parse(content, root, env, read);
+            return new Result.Loaded(root.resolve(ConfigParser.FILE_NAME), content, project);
+        } catch (ConfigException e) {
+            return new Result.Invalid(
+                    root.resolve(ConfigParser.FILE_NAME), e.format(ConfigParser.FILE_NAME), e.problems());
+        }
     }
 
     /** {@code content} as the file {@code path}: its folder is the project's root. */

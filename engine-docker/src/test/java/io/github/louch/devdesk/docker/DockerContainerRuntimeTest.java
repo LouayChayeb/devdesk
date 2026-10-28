@@ -157,6 +157,47 @@ class DockerContainerRuntimeTest {
     }
 
     @Test
+    void theEntrypointReplacesTheImagesAndTheCommandFollowsIt() throws Exception {
+        // compose's entrypoint: + command: (Chatwoot's rails.sh runs before "rails s").
+        var c = runtime.start(
+                new ContainerLaunchSpec(
+                        project,
+                        "ep",
+                        new Workload.Container(
+                                IMAGE,
+                                List.of(),
+                                List.of(),
+                                Optional.of("second"),
+                                Optional.empty(),
+                                Optional.of("echo first")),
+                        Map.of()),
+                lines::add);
+
+        assertThat(runtime.onExit(c).get(30, TimeUnit.SECONDS)).isEqualTo(ExitStatus.of(0));
+        awaitTrue(() -> lines.contains(new OutputLine(StreamKind.STDOUT, "first second")));
+    }
+
+    @Test
+    void aUdpPortIsPublishedAsUdp() throws Exception {
+        int port;
+        try (java.net.DatagramSocket s = new java.net.DatagramSocket(0)) {
+            port = s.getLocalPort();
+        }
+        var c = runtime.start(
+                spec("udp", "sleep 30", List.of(new Workload.PortMapping("127.0.0.1", port, 6831, true))), lines::add);
+
+        var bindings = docker.inspectContainerCmd(c.id())
+                .exec()
+                .getHostConfig()
+                .getPortBindings()
+                .getBindings();
+        assertThat(bindings).containsKey(com.github.dockerjava.api.model.ExposedPort.udp(6831));
+        assertThat(bindings.get(com.github.dockerjava.api.model.ExposedPort.udp(6831))[0].getHostPortSpec())
+                .isEqualTo(String.valueOf(port));
+        runtime.stop(c, Duration.ofSeconds(1));
+    }
+
+    @Test
     void ourLeftoverIsReplacedButSomeoneElsesContainerIsNeverTouched() throws Exception {
         var first = runtime.start(spec("api", "sleep 1000", List.of()), lines::add);
         // DevDesk "crashed" without stopping it: the next start replaces its own leftover.

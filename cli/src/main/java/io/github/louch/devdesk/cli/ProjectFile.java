@@ -15,7 +15,11 @@ record ProjectFile(Path path, String content, ProjectSpec project) {
 
     static Optional<ProjectFile> load(Path file, Map<String, String> env, PrintStream err) {
         return switch (ProjectLoader.load(file, env)) {
-            case ProjectLoader.Result.Loaded l -> Optional.of(new ProjectFile(l.file(), l.content(), l.project()));
+            case ProjectLoader.Result.Loaded l -> {
+                // Allowed, but probably not meant (an unset ${VAR} is empty): said once, like compose's warnings.
+                l.project().warnings().forEach(w -> err.println("devdesk: note: " + w));
+                yield Optional.of(new ProjectFile(l.file(), l.content(), l.project()));
+            }
             case ProjectLoader.Result.Invalid i -> {
                 err.println(i.message());
                 yield Optional.empty();

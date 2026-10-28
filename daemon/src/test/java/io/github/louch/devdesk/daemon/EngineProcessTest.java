@@ -55,14 +55,19 @@ class EngineProcessTest {
             assertThat(scan.statusCode()).isEqualTo(200);
             assertThat(scan.body())
                     .contains("\"mode\":\"new\"")
-                    .contains("\"DATABASE_URL\":\"postgres://postgres:${DB_PASSWORD}@127.0.0.1:55450/shop\"");
+                    // Built as a container by default, reaching "db" by name; the way to run it here is kept too.
+                    .contains("\"DATABASE_URL\":\"postgres://postgres:${DB_PASSWORD}@db:5432/shop\"")
+                    .contains(
+                            "\"native.env.DATABASE_URL\":\"postgres://postgres:${DB_PASSWORD}@127.0.0.1:55450/shop\"");
             Map<?, ?> scanned = ApiJson.MAPPER.readValue(scan.body(), Map.class);
             var preview = post(
                     base + "/setup/preview",
                     token,
                     ApiJson.write(Map.of("path", compose, "draft", scanned.get("draft"))));
             assertThat(preview.statusCode()).isEqualTo(200);
-            assertThat(preview.body()).contains("\"problems\":[]").contains("api:  npm run dev");
+            assertThat(preview.body())
+                    .contains("\"problems\":[]")
+                    .contains("api:  container compose-shop-api (built from ");
             assertThat(Path.of(compose, "devdesk.yaml")).doesNotExist();
             assertThat(post(base + "/setup/scan", token, "{\"path\":\"/no/such/folder\"}")
                             .statusCode())

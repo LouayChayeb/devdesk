@@ -37,7 +37,8 @@ public final class ComposeImport {
     static final String UNREADABLE = "could not be read, so nothing was imported from it: ";
 
     private static final Pattern DURATION = Pattern.compile("\\d+(ms|s|m|h)");
-    private static final Pattern PORT = Pattern.compile("(?:(\\d+\\.\\d+\\.\\d+\\.\\d+):)?(\\d+)(?::(\\d+))?(/tcp)?");
+    private static final Pattern PORT =
+            Pattern.compile("(?:(\\d+\\.\\d+\\.\\d+\\.\\d+):)?(\\d+)(?::(\\d+))?(/tcp|/udp)?");
 
     private final String project;
     private final String composeProject;
@@ -63,9 +64,25 @@ public final class ComposeImport {
      */
     public static Result read(
             String yaml, String project, String folderName, Function<String, Optional<DetectedApp>> detectApp) {
+        return read(yaml, Optional.empty(), project, folderName, detectApp);
+    }
+
+    /**
+     * @param override compose.override.yml, which docker compose reads on top of the file (Plausible publishes its
+     *     port there): merged the same way before anything is mapped
+     */
+    public static Result read(
+            String yaml,
+            Optional<String> override,
+            String project,
+            String folderName,
+            Function<String, Optional<DetectedApp>> detectApp) {
         YamlNode top;
         try {
             top = YamlReader.read(yaml);
+            if (override.isPresent()) {
+                top = merge(top, YamlReader.read(override.get()), "");
+            }
         } catch (ConfigException e) {
             return new Result(List.of(), List.of(), List.of(UNREADABLE + e.getMessage()));
         }
@@ -113,6 +130,43 @@ public final class ComposeImport {
         return new Result(services, List.copyOf(envFiles), List.copyOf(notes));
     }
 
+    /** Keys whose value the override replaces as a whole, as compose does: a command isn't added to, it's changed. */
+    private static final Set<String> REPLACED = Set.of("command", "entrypoint", "test", "image", "build");
+
+    /**
+     * Compose's rule for an override file: mappings merge key by key, lists like ports and volumes add up (without
+     * repeats), and anything else the override says wins.
+     */
+    static YamlNode merge(YamlNode base, YamlNode over, String key) {
+        if (REPLACED.contains(key)) {
+            return over;
+        }
+        if (base instanceof YamlNode.Mapping b && over instanceof YamlNode.Mapping o) {
+            Map<String, YamlNode.Entry> entries = new LinkedHashMap<>(b.entries());
+            o.entries()
+                    .forEach((k, e) -> entries.merge(
+                            k,
+                            e,
+                            (old, add) -> new YamlNode.Entry(old.keyLocation(), merge(old.value(), add.value(), k))));
+            return new YamlNode.Mapping(entries, b.location());
+        }
+        if (base instanceof YamlNode.Sequence b && over instanceof YamlNode.Sequence o) {
+            List<YamlNode> items = new ArrayList<>(b.items());
+            for (YamlNode item : o.items()) {
+                boolean seen = item instanceof YamlNode.Scalar sc
+                        && items.stream()
+                                .anyMatch(i -> i instanceof YamlNode.Scalar x
+                                        && x.text() != null
+                                        && x.text().equals(sc.text()));
+                if (!seen) {
+                    items.add(item);
+                }
+            }
+            return new YamlNode.Sequence(items, b.location());
+        }
+        return over;
+    }
+
     private SetupDraft.Service service(String name, YamlNode.Mapping s, Map<String, Map<Integer, Integer>> published) {
         List<String> cardNotes = new ArrayList<>();
         Optional<String> image = entry(s, "image").flatMap(ComposeImport::text);
@@ -121,10 +175,12 @@ public final class ComposeImport {
                         b instanceof YamlNode.Mapping ? entry(b, "context").flatMap(ComposeImport::text) : text(b));
         List<String> ports = ports(s, name, cardNotes);
         Map<String, String> env = environment(s, cardNotes);
+        // compose's env_file: what this service's container gets (not the whole project's).
+        List<String> ownEnvFiles = new ArrayList<>();
         entry(s, "env_file")
                 .ifPresent(e -> list(e).forEach(
                                 f -> text(f).or(() -> entry(f, "path").flatMap(ComposeImport::text))
-                                        .ifPresent(file -> envFiles.add(file.replaceFirst("^\\./", "")))));
+                                        .ifPresent(file -> ownEnvFiles.add(file.replaceFirst("^\\./", "")))));
         Map<String, String> dependsOn = dependsOn(s);
         String restart = entry(s, "restart")
                 .flatMap(ComposeImport::text)
@@ -134,93 +190,54 @@ public final class ComposeImport {
                     default -> "no";
                 })
                 .orElse("no");
-        if (entry(s, "entrypoint").isPresent()) {
-            cardNotes.add("Its entrypoint: setting is not copied. Put the full command in the command field.");
-        }
+        // Chatwoot's rails service starts through docker/entrypoints/rails.sh: kept, or the app skips its preparation.
+        Optional<String> entrypoint = entry(s, "entrypoint").map(ComposeImport::commandLine);
 
-        if (image.isEmpty() && buildDir.isPresent()) {
-            String cleaned = buildDir.get().replaceFirst("^\\./", "").replaceFirst("/$", "");
-            String dir = cleaned.equals(".") ? "" : cleaned;
-            Optional<DetectedApp> app = detectApp.apply(dir);
-            Optional<String> composeCommand = entry(s, "command").map(ComposeImport::commandLine);
-            if (composeCommand.isPresent()
-                    && app.map(a -> a.origin().matches(".*Dockerfile (CMD|ENTRYPOINT)"))
-                            .orElse(true)) {
-                // Compose's command overrides the Dockerfile's CMD, so it's the more faithful of the two.
-                app = Optional.of(new DetectedApp(
-                        composeCommand.get(),
-                        app.flatMap(DetectedApp::port),
-                        Optional.empty(),
-                        "its command: in docker-compose.yml",
-                        List.of("It's the command compose runs inside the image: it assumes what the image installs"
-                                + " is installed here too, and compose names in it (like db:5432) need 127.0.0.1"
-                                + " and the published port.")));
+        Map<String, String> extras = new LinkedHashMap<>();
+        if (!ownEnvFiles.isEmpty()) {
+            extras.put("env_files", String.join(",", ownEnvFiles));
+        }
+        // Twenty's server boots for ~100 s: compose gives it 20 retries 5 s apart, and so must DevDesk.
+        extras.putAll(healthTiming(s));
+        entrypoint.ifPresent(e -> extras.put("entrypoint", e));
+        if (buildDir.isPresent()) {
+            List<String> shared = List.copyOf(cardNotes);
+            SetupDraft.Service local =
+                    onThisMachine(name, s, buildDir.get(), ports, env, dependsOn, restart, published, cardNotes);
+            String dir = local.directory();
+            cardNotes.clear();
+            cardNotes.addAll(shared);
+            // Containers by default: the project's own Dockerfile installs what it needs, nothing lands on this
+            // machine. The command found for running it here stays on the card, one click away.
+            extras.put("build", dir.isEmpty() ? "." : dir);
+            entry(s, "build")
+                    .flatMap(b -> b instanceof YamlNode.Mapping ? entry(b, "dockerfile") : Optional.empty())
+                    .flatMap(ComposeImport::text)
+                    .ifPresent(f -> extras.put("build.dockerfile", f));
+            if (!local.command().isBlank()) {
+                extras.put("native.command", local.command());
+                extras.put("native.ports", String.join(",", local.ports()));
+                extras.put("native.health.type", local.health().type());
+                extras.put("native.health.target", local.health().target());
             }
-            List<Integer> hostPorts = ports.stream()
-                    .map(p -> portMap(List.of(p)).values().stream().findFirst().orElse(-1))
-                    .filter(p -> p > 0)
-                    .toList();
-            List<String> commandPorts = hostPorts.isEmpty()
-                    ? app.flatMap(DetectedApp::port)
-                            .map(p -> List.of(String.valueOf(p)))
-                            .orElse(List.of())
-                    : hostPorts.stream().map(String::valueOf).toList();
-            cardNotes.add(app.map(a -> "docker-compose.yml builds it from a Dockerfile in ./" + dir
-                            + ". DevDesk runs it on your machine instead (" + a.origin() + "), so code changes "
-                            + "apply right away. Check the command.")
-                    .orElse("docker-compose.yml builds it from a Dockerfile in ./" + dir
-                            + ", and DevDesk can't build images. Type the command that starts it on your machine."));
-            app.ifPresent(a -> cardNotes.addAll(a.notes()));
-            Map<String, String> pointed = pointAtHost(name, env, published, cardNotes);
-            for (String secret : secrets(s)) {
-                String file = secretFiles.get(secret);
-                // On this machine there's no /run/secrets: a setting that names it gets the file instead.
-                List<String> keys = file == null
-                        ? List.of()
-                        : pointed.entrySet().stream()
-                                .filter(e -> e.getValue().equals("/run/secrets/" + secret))
-                                .map(Map.Entry::getKey)
-                                .toList();
-                keys.forEach(k -> pointed.put(k, fromServiceDir(dir, file)));
-                cardNotes.add(
-                        keys.isEmpty()
-                                ? "Compose gives it the secret \"" + secret + "\" at /run/secrets/" + secret
-                                        + "; on your"
-                                        + " machine it's the file "
-                                        + Optional.ofNullable(file).orElse("(not a file)")
-                                        + ": point the setting that reads it there."
-                                : String.join(", ", keys) + " named the secret \"" + secret + "\" at /run/secrets/"
-                                        + secret
-                                        + ", which only exists inside compose's container; it now names the file "
-                                        + file
-                                        + " instead.");
-            }
-            SetupDraft.Health health = app.flatMap(DetectedApp::healthUrl)
-                    .map(SetupDraft.Health::http)
-                    .orElse(
-                            commandPorts.isEmpty()
-                                    ? SetupDraft.Health.PROCESS
-                                    : SetupDraft.Health.tcp(Integer.parseInt(commandPorts.getFirst())));
-            return new SetupDraft.Service(
-                    name,
-                    "command",
-                    app.map(DetectedApp::command).orElse(""),
-                    dir,
-                    "",
-                    commandPorts,
-                    List.of(),
-                    pointed,
-                    dependsOn,
-                    health,
-                    restart,
-                    "docker-compose.yml",
-                    cardNotes);
+            extras.put("native.directory", local.directory());
+            // On this machine, compose names (db:5432) become 127.0.0.1 and secrets become file paths.
+            local.environment().forEach((k, v) -> {
+                if (!v.equals(env.get(k))) {
+                    extras.put("native.env." + k, v);
+                }
+            });
+            image = image.or(() -> Optional.of(composeProject + "-" + name));
+            cardNotes.add("DevDesk builds its image from ./" + (dir.isEmpty() ? "" : dir + "/")
+                    + extras.getOrDefault("build.dockerfile", "Dockerfile") + " the first time it starts, like docker"
+                    + " compose build"
+                    + (local.command().isBlank()
+                            ? "."
+                            : ". To run it on your machine instead (code changes apply right away), switch it to"
+                                    + " command: DevDesk fills in \"" + local.command() + "\"."));
         }
         if (image.isEmpty()) {
             cardNotes.add("It has neither image: nor build: in docker-compose.yml. Choose an image or a command.");
-        } else if (buildDir.isPresent()) {
-            cardNotes.add("docker-compose.yml also builds this image. DevDesk can't build images: run "
-                    + "\"docker compose build " + name + "\" once, then DevDesk uses the result.");
         }
         Integer added = addedPorts.get(name);
         if (added != null) {
@@ -230,6 +247,12 @@ public final class ComposeImport {
         }
         String command = entry(s, "command").map(ComposeImport::commandLine).orElse("");
         String container = ContainerRuntime.containerName(project, name);
+        SetupDraft.Health health = health(s, image.orElse(""), container, ports);
+        if (health.equals(SetupDraft.Health.PROCESS) && ports.size() > 1) {
+            cardNotes.add("It publishes " + ports.size() + " ports and compose gives it no health check, so DevDesk"
+                    + " only checks that it runs. To check it answers, give it a tcp or http check on the port that"
+                    + " serves.");
+        }
         return new SetupDraft.Service(
                 name,
                 "container",
@@ -240,7 +263,100 @@ public final class ComposeImport {
                 withSecrets(volumes(s), s, cardNotes),
                 env,
                 dependsOn,
-                health(s, image.orElse(""), container, ports),
+                health,
+                restart,
+                "docker-compose.yml",
+                cardNotes,
+                extras);
+    }
+
+    /**
+     * How a service compose builds from a Dockerfile runs on this machine instead (how people develop day to day),
+     * found by {@code detectApp}. Its notes go to {@code cardNotes}.
+     */
+    private SetupDraft.Service onThisMachine(
+            String name,
+            YamlNode.Mapping s,
+            String buildDir,
+            List<String> ports,
+            Map<String, String> env,
+            Map<String, String> dependsOn,
+            String restart,
+            Map<String, Map<Integer, Integer>> published,
+            List<String> cardNotes) {
+        String cleaned = buildDir.replaceFirst("^\\./", "").replaceFirst("/$", "");
+        String dir = cleaned.equals(".") ? "" : cleaned;
+        Optional<DetectedApp> app = detectApp.apply(dir);
+        Optional<String> composeCommand = entry(s, "command").map(ComposeImport::commandLine);
+        if (composeCommand.isPresent()
+                && app.map(a -> a.origin().matches(".*Dockerfile (CMD|ENTRYPOINT)"))
+                        .orElse(true)) {
+            // Compose's command overrides the Dockerfile's CMD, so it's the more faithful of the two.
+            app = Optional.of(new DetectedApp(
+                    composeCommand.get(),
+                    app.flatMap(DetectedApp::port),
+                    Optional.empty(),
+                    "its command: in docker-compose.yml",
+                    List.of("It's the command compose runs inside the image: it assumes what the image installs"
+                            + " is installed here too, and compose names in it (like db:5432) need 127.0.0.1"
+                            + " and the published port.")));
+        }
+        List<Integer> hostPorts = ports.stream()
+                .map(p -> portMap(List.of(p)).values().stream().findFirst().orElse(-1))
+                .filter(p -> p > 0)
+                .toList();
+        List<String> commandPorts = hostPorts.isEmpty()
+                ? app.flatMap(DetectedApp::port)
+                        .map(p -> List.of(String.valueOf(p)))
+                        .orElse(List.of())
+                : hostPorts.stream().map(String::valueOf).toList();
+        cardNotes.add(app.map(a -> "docker-compose.yml builds it from a Dockerfile in ./" + dir
+                        + ". DevDesk runs it on your machine instead (" + a.origin() + "), so code changes "
+                        + "apply right away. Check the command.")
+                .orElse("docker-compose.yml builds it from a Dockerfile in ./" + dir
+                        + ". To run it on your machine, type the command that starts it."));
+        app.ifPresent(a -> cardNotes.addAll(a.notes()));
+        Map<String, String> pointed = pointAtHost(name, env, published, cardNotes);
+        for (String secret : secrets(s)) {
+            String file = secretFiles.get(secret);
+            // On this machine there's no /run/secrets: a setting that names it gets the file instead.
+            List<String> keys = file == null
+                    ? List.of()
+                    : pointed.entrySet().stream()
+                            .filter(e -> e.getValue().equals("/run/secrets/" + secret))
+                            .map(Map.Entry::getKey)
+                            .toList();
+            keys.forEach(k -> pointed.put(k, fromServiceDir(dir, file)));
+            cardNotes.add(
+                    keys.isEmpty()
+                            ? "Compose gives it the secret \"" + secret + "\" at /run/secrets/" + secret
+                                    + "; on your"
+                                    + " machine it's the file "
+                                    + Optional.ofNullable(file).orElse("(not a file)")
+                                    + ": point the setting that reads it there."
+                            : String.join(", ", keys) + " named the secret \"" + secret + "\" at /run/secrets/"
+                                    + secret
+                                    + ", which only exists inside compose's container; it now names the file "
+                                    + file
+                                    + " instead.");
+        }
+        SetupDraft.Health health = app.flatMap(DetectedApp::healthUrl)
+                .map(SetupDraft.Health::http)
+                .orElse(
+                        commandPorts.isEmpty()
+                                ? SetupDraft.Health.PROCESS
+                                : SetupDraft.Health.tcp(Integer.parseInt(commandPorts.getFirst())));
+        return new SetupDraft.Service(
+                name,
+                "command",
+                app.map(DetectedApp::command).orElse(""),
+                dir,
+                "",
+                commandPorts,
+                List.of(),
+                pointed,
+                dependsOn,
+                health,
                 restart,
                 "docker-compose.yml",
                 cardNotes);
@@ -274,10 +390,11 @@ public final class ComposeImport {
                     if (m == null || m.group(3) == null) {
                         cardNotes.add(
                                 "Port " + spec.orElse("?") + " was skipped: DevDesk needs a fixed \"host:container\" "
-                                        + "port like \"8080:80\" (no ranges, no UDP, no random host port).");
+                                        + "port like \"8080:80\" (no ranges, no random host port).");
                         return;
                     }
-                    out.add((m.group(1) == null ? "" : m.group(1) + ":") + m.group(2) + ":" + m.group(3));
+                    out.add((m.group(1) == null ? "" : m.group(1) + ":") + m.group(2) + ":" + m.group(3)
+                            + ("/udp".equals(m.group(4)) ? "/udp" : ""));
                 }));
         return out;
     }
@@ -286,7 +403,7 @@ public final class ComposeImport {
         Map<Integer, Integer> map = new LinkedHashMap<>();
         for (String p : mappings) {
             String[] parts = p.split(":");
-            if (parts.length >= 2) {
+            if (parts.length >= 2 && !p.endsWith("/udp")) { // TCP ports only: what apps and checks connect to
                 map.put(Integer.parseInt(parts[parts.length - 1]), Integer.parseInt(parts[parts.length - 2]));
             }
         }
@@ -434,14 +551,34 @@ public final class ComposeImport {
         if (test.isPresent()) {
             return SetupDraft.Health.command("docker exec " + container + " " + test.get(), startPeriod);
         }
+        // No healthcheck in compose: a port only when there is exactly one to check. With several (jaeger publishes
+        // 5778, 16686, 14268, 9411), the first one is a guess that was wrong: "running" is the honest check.
         return KnownImages.health(image, container, ports)
                 .orElse(
-                        ports.isEmpty()
+                        ports.size() != 1
                                 ? SetupDraft.Health.PROCESS
                                 : SetupDraft.Health.tcp(portMap(List.of(ports.getFirst()))
                                         .values()
                                         .iterator()
                                         .next()));
+    }
+
+    /** compose's healthcheck interval, timeout and retries, as the card's health timing ("health.interval"…). */
+    private static Map<String, String> healthTiming(YamlNode.Mapping s) {
+        Map<String, String> timing = new LinkedHashMap<>();
+        entry(s, "healthcheck").ifPresent(h -> {
+            for (String key : List.of("interval", "timeout")) {
+                entry(h, key)
+                        .flatMap(ComposeImport::text)
+                        .filter(d -> DURATION.matcher(d).matches())
+                        .ifPresent(d -> timing.put("health." + key, d));
+            }
+            entry(h, "retries")
+                    .flatMap(ComposeImport::text)
+                    .filter(r -> r.matches("\\d{1,3}"))
+                    .ifPresent(r -> timing.put("health.retries", r));
+        });
+        return timing;
     }
 
     /**

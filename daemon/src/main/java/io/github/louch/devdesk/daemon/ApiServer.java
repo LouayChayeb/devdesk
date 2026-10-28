@@ -174,9 +174,17 @@ final class ApiServer {
             });
             config.routes.post("/api/v1/project/trust", ctx -> answer(ctx, session.trust()));
             // The "Add project" wizard: scan a folder, edit cards, check, test-run unsaved, write devdesk.yaml.
+            config.routes.post("/api/v1/get", ctx -> answer(ctx, setup.get().start(ctx.bodyAsClass(Map.class))));
+            config.routes.get("/api/v1/get", ctx -> answer(ctx, setup.get().status()));
+            config.routes.get(
+                    "/api/v1/project/removal", ctx -> answer(ctx, setup.get().removalPlan()));
+            config.routes.post(
+                    "/api/v1/project/remove", ctx -> answer(ctx, setup.get().remove(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/scan", ctx -> answer(ctx, setup.scan(ctx.bodyAsClass(Map.class))));
             config.routes.post(
                     "/api/v1/setup/database", ctx -> answer(ctx, setup.addDatabase(ctx.bodyAsClass(Map.class))));
+            config.routes.post(
+                    "/api/v1/setup/switch", ctx -> answer(ctx, setup.switchKind(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/preview", ctx -> answer(ctx, setup.preview(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/doctor", ctx -> answer(ctx, setup.doctor(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/test", ctx -> answer(ctx, setup.test(ctx.bodyAsClass(Map.class))));

@@ -10,6 +10,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * The wizard's first step: looks at a folder without a devdesk.yaml and drafts one. Reads docker-compose.yml, the build
@@ -63,6 +66,70 @@ public final class FolderScan {
 
     private FolderScan() {}
 
+    /**
+     * A service's own env files that exist, or that Set up can make from an example next to them (Mastodon's
+     * .env.production from .env.production.sample). One with neither is dropped, with a note saying so.
+     */
+    private static SetupDraft.Service withOwnEnvFiles(SetupDraft.Service s, Folder folder) {
+        String files = s.extras().get("env_files");
+        if (files == null) {
+            return s;
+        }
+        List<String> kept = new ArrayList<>();
+        List<String> notes = new ArrayList<>(s.notes());
+        for (String f : files.split(",")) {
+            if (folder.read(f).isPresent()) {
+                kept.add(f);
+            } else if (FreshSetup.exampleOf(f, folder::read).isPresent()) {
+                kept.add(f);
+                notes.add(f + " doesn't exist yet: Set up makes it from "
+                        + FreshSetup.exampleOf(f, folder::read).get()
+                        + " and asks for the values that are placeholders.");
+            } else {
+                notes.add("docker-compose.yml gives it the settings in " + f + ", which doesn't exist and has no"
+                        + " example. Create it with what the project's docs say, then open the project again.");
+            }
+        }
+        Map<String, String> extras = new LinkedHashMap<>(s.extras());
+        if (kept.isEmpty()) {
+            extras.remove("env_files");
+        } else {
+            extras.put("env_files", String.join(",", kept));
+        }
+        return new SetupDraft.Service(
+                s.name(),
+                s.kind(),
+                s.command(),
+                s.directory(),
+                s.image(),
+                s.ports(),
+                s.volumes(),
+                s.environment(),
+                s.dependsOn(),
+                s.health(),
+                s.restart(),
+                s.origin(),
+                notes,
+                extras);
+    }
+
+    private static final Pattern EXPOSE = Pattern.compile("(?im)^\\s*EXPOSE\\s+(.+)$");
+
+    /** "EXPOSE 8080 9090/tcp": the TCP ports, in order. UDP and variables ($PORT) can't be published as they are. */
+    static List<String> exposedPorts(String dockerfile) {
+        List<String> ports = new ArrayList<>();
+        Matcher m = EXPOSE.matcher(dockerfile);
+        while (m.find()) {
+            for (String word : m.group(1).trim().split("\\s+")) {
+                String port = word.replaceFirst("/tcp$", "");
+                if (port.matches("\\d{1,5}") && !ports.contains(port)) {
+                    ports.add(port);
+                }
+            }
+        }
+        return ports;
+    }
+
     /** @param absolutePath the folder's full path, to recognise compose containers started from it */
     public static Result scan(Folder folder, String absolutePath, List<RunningContainer> running) {
         String project = projectName(folder.name());
@@ -74,8 +141,14 @@ public final class FolderScan {
         Optional<String> composeFile =
                 COMPOSE_FILES.stream().filter(f -> folder.read(f).isPresent()).findFirst();
         composeFile.ifPresent(file -> {
+            // compose reads <name>.override.yml on top of the file by itself; so does DevDesk.
+            Optional<String> overrideFile = Stream.of(".override.yml", ".override.yaml")
+                    .map(ext -> file.replaceFirst("\\.ya?ml$", ext))
+                    .filter(f -> folder.read(f).isPresent())
+                    .findFirst();
             var compose = ComposeImport.read(
                     folder.read(file).orElseThrow(),
+                    overrideFile.flatMap(folder::read),
                     project,
                     folder.name(),
                     dir -> AppDetector.detectBuild(folder::read, dir));
@@ -90,14 +163,74 @@ public final class FolderScan {
                     .map(n -> file + ": " + n)
                     .orElse(file + ": " + compose.services().size() + " service"
                             + (compose.services().size() == 1 ? "" : "s")));
-            if (folder.read(file.replaceFirst("\\.ya?ml$", ".override.yml")).isPresent()) {
-                notes.add("docker-compose.override.yml was not read: check its changes by hand.");
-            }
+            overrideFile.ifPresent(f -> found.add(f + ": read on top of " + file + ", like docker compose does"));
         });
 
+        // Only a Dockerfile: the project says how it runs, so it runs that way, built by DevDesk.
+        if (composeFile.isEmpty()) {
+            folder.read("Dockerfile").ifPresent(dockerfile -> {
+                List<String> exposed = exposedPorts(dockerfile);
+                String compose = "services:\n  " + project + ":\n    build: .\n"
+                        + (exposed.isEmpty()
+                                ? ""
+                                : "    ports: ["
+                                        + String.join(
+                                                ", ",
+                                                exposed.stream()
+                                                        .map(port -> "\"" + port + ":" + port + "\"")
+                                                        .toList())
+                                        + "]\n");
+                ComposeImport.read(compose, project, folder.name(), dir -> AppDetector.detectBuild(folder::read, dir))
+                        .services()
+                        .forEach(card -> services.add(new SetupDraft.Service(
+                                card.name(),
+                                card.kind(),
+                                card.command(),
+                                card.directory(),
+                                card.image(),
+                                card.ports(),
+                                card.volumes(),
+                                card.environment(),
+                                card.dependsOn(),
+                                card.health(),
+                                card.restart(),
+                                "Dockerfile",
+                                card.notes(),
+                                card.extras())));
+                found.add("Dockerfile: built and run as " + project
+                        + (exposed.isEmpty() ? "" : " (port " + String.join(", ", exposed) + ")"));
+            });
+        }
+
         // Apps the compose file doesn't already cover (compose may only hold the databases).
+        // Covered: a folder compose builds an image from, or that runs as a command already. In the trials, adding
+        // those again made duplicates on the same port ("umami-2", "order-service-2").
         Set<String> covered = new LinkedHashSet<>();
-        services.stream().filter(s -> !s.isContainer()).forEach(s -> covered.add(s.directory()));
+        services.forEach(s -> {
+            if (!s.isContainer()) {
+                covered.add(s.directory());
+            } else if (s.extras().containsKey("build")) {
+                covered.add(s.extras().get("native.directory"));
+            }
+        });
+        Set<Integer> published = new LinkedHashSet<>();
+        services.forEach(s -> published.addAll(s.hostPorts()));
+        if (composeFile.isPresent()) {
+            // A folder named like a compose service is that service's code (Mastodon's streaming/); the top folder
+            // is the app itself when a compose service runs the project's own image (Chatwoot: chatwoot/chatwoot).
+            services.forEach(s -> covered.add(s.name()));
+            String self = folder.name().toLowerCase();
+            boolean ownImage = services.stream()
+                    .anyMatch(s -> s.isContainer()
+                            && (".".equals(s.extras().get("build"))
+                                    || s.image()
+                                            .replaceFirst(":.*", "")
+                                            .replaceFirst(".*/", "")
+                                            .equalsIgnoreCase(self)));
+            if (ownImage) {
+                covered.add("");
+            }
+        }
         List<String> dirs = new ArrayList<>();
         if (!AppDetector.isWorkspaceRoot(folder::read)) {
             dirs.add("");
@@ -111,6 +244,9 @@ public final class FolderScan {
                 continue;
             }
             AppDetector.detect(folder::read, dir, dir.isEmpty() ? folder.files() : List.of())
+                    // An app on a port a compose service already publishes is that service: the official image of
+                    // the same app, say.
+                    .filter(app -> app.port().filter(published::contains).isEmpty())
                     .ifPresent(app -> {
                         String name = DatabaseTemplates.uniqueName(
                                 ComposeImport.serviceName(dir.isEmpty() ? project : dir),
@@ -140,7 +276,9 @@ public final class FolderScan {
                     });
         }
         // Plain scripts only when nothing else starts from the top folder (a Node app's helper .py isn't a service).
-        if (services.stream().noneMatch(s -> !s.isContainer() && s.directory().isEmpty())) {
+        if (services.stream()
+                .noneMatch(s -> (!s.isContainer() && s.directory().isEmpty())
+                        || ".".equals(s.extras().get("build")))) {
             List<SetupDraft.Service> scripts = PythonScripts.find(
                     folder.files(),
                     folder::read,
@@ -151,14 +289,25 @@ public final class FolderScan {
         }
         guessDependencies(services);
 
-        for (String env : ENV_FILES) {
+        // A compose project fills ${VAR} from .env only, as compose does: .env.development (Mastodon's) is for its
+        // developers' own setup, not for the containers. Without compose, the usual files of a native app.
+        for (String env : composeFile.isPresent() ? List.of(".env") : ENV_FILES) {
             folder.read(env).ifPresent(content -> {
                 envFiles.add(env);
                 int n = EnvReport.keys(content).size();
                 found.add(env + ": " + n + " variable" + (n == 1 ? "" : "s"));
             });
         }
-        envFiles.removeIf(f -> folder.read(f).isEmpty()); // devdesk.yaml refuses an env file that doesn't exist
+        // .env not there yet, but the compose file uses ${VAR}s nothing sets: Set up creates it and asks for them.
+        if (composeFile.isPresent()
+                && folder.read(".env").isEmpty()
+                && !FreshSetup.unsetVariables(services).isEmpty()) {
+            envFiles.add(".env");
+        }
+        envFiles.removeIf(f -> folder.read(f).isEmpty()
+                && !f.equals(".env")
+                && FreshSetup.exampleOf(f, folder::read).isEmpty());
+        services.replaceAll(s -> withOwnEnvFiles(s, folder));
 
         List<SetupDraft.Service> suggestions = suggestions(running, absolutePath, services, notes, project);
         if (services.isEmpty()) {

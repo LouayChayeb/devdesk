@@ -54,8 +54,11 @@ public final class ServiceEnvironment {
         if (!(service.workload() instanceof Workload.Container)) {
             put(env, OUTPUT_FRIENDLY_DEFAULTS, Source.DEVDESK);
             put(env, shell, Source.SHELL);
+            // The project's env files fill ${VAR} everywhere, and reach the commands on this machine (apps that
+            // read .env themselves). A container gets only what its service names, like docker compose: a .env
+            // full of empty optional settings once broke Twenty's validation.
+            put(env, project.environment(), Source.ENV_FILE);
         }
-        put(env, project.environment(), Source.ENV_FILE);
         put(env, service.environment(), Source.SERVICE);
         return List.copyOf(env.values());
     }

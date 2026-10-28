@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,6 +41,7 @@ public final class ConfigParser {
             "command",
             "directory",
             "environment",
+            "env_files",
             "depends_on",
             "ports",
             "health",
@@ -61,12 +63,20 @@ public final class ConfigParser {
             "timeout",
             "retries",
             "start_period");
-    private static final Set<String> CONTAINER_KEYS = Set.of("image", "ports", "volumes", "environment", "command");
-    private static final Pattern PORT_MAPPING = Pattern.compile("(?:(\\d+\\.\\d+\\.\\d+\\.\\d+):)?(\\d+)(?::(\\d+))?");
+    private static final Set<String> CONTAINER_KEYS =
+            Set.of("image", "build", "ports", "volumes", "environment", "command", "entrypoint");
+    private static final Set<String> BUILD_KEYS = Set.of("context", "dockerfile");
+    private static final Pattern PORT_MAPPING =
+            Pattern.compile("(?:(\\d+\\.\\d+\\.\\d+\\.\\d+):)?(\\d+)(?::(\\d+))?(?:/(tcp|udp))?");
     private static final Pattern SERVICE_NAME = Pattern.compile("[a-z0-9][a-z0-9_-]*");
     private static final Pattern STATUS_RANGE = Pattern.compile("(\\d{3})(-(\\d{3}))?");
 
     private final Path root;
+    /** Allowed but probably not meant: shown when the project opens. In order, without repeats. */
+    private final Set<String> warnings = new LinkedHashSet<>();
+    /** The project's name, once read: an image DevDesk builds is named after it. */
+    private String projectName = "project";
+
     private final Function<String, Optional<String>> readFile;
     private final Map<String, String> env;
     private final List<ConfigProblem> problems = new ArrayList<>();
@@ -119,6 +129,7 @@ public final class ConfigParser {
                         root.getFileName() == null
                                 ? "project"
                                 : root.getFileName().toString());
+        projectName = name;
         get(top, "env_files").ifPresent(this::envFiles);
 
         Map<String, ServiceSpec> services = new LinkedHashMap<>();
@@ -149,7 +160,7 @@ public final class ConfigParser {
         if (!problems.isEmpty()) {
             throw new ConfigException(problems);
         }
-        return new ProjectSpec(name, root, fileEnv, services, profiles, tasks);
+        return new ProjectSpec(name, root, fileEnv, services, profiles, tasks, List.copyOf(warnings));
     }
 
     /** {@code tasks: { seed: { command, directory?, environment?, needs?: [db], description?, confirm? } }}. */
@@ -286,6 +297,10 @@ public final class ConfigParser {
         return out;
     }
 
+    private void warn(String message) {
+        warnings.add(message);
+    }
+
     private void envFiles(YamlNode node) {
         for (YamlNode item : items(node, "env_files")) {
             text(item, "env_files")
@@ -300,6 +315,21 @@ public final class ConfigParser {
                                             item.location(),
                                             "env_files",
                                             "file \"" + file + "\" not found in " + root)));
+        }
+    }
+
+    /** A service's own env files: their values go to that service only, like compose's env_file. */
+    private void serviceEnvFiles(YamlNode node, String path, Map<String, String> into) {
+        for (YamlNode item : items(node, path)) {
+            text(item, path)
+                    .ifPresent(file -> readFile.apply(file)
+                            .ifPresentOrElse(
+                                    content -> into.putAll(EnvFile.parse(content)),
+                                    () -> problem(
+                                            item.location(),
+                                            path,
+                                            "file \"" + file + "\" not found in " + root
+                                                    + ". If the project has an example of it, Set up creates it")));
         }
     }
 
@@ -339,6 +369,8 @@ public final class ConfigParser {
                 .map(d -> root.resolve(d).normalize())
                 .orElse(root);
         Map<String, String> environment = new LinkedHashMap<>();
+        // The service's own env files (compose's env_file:) first: its environment: block wins over them.
+        get(s, "env_files").ifPresent(files -> serviceEnvFiles(files, path + ".env_files", environment));
         get(s, "environment").ifPresent(e -> environment(e, path + ".environment", environment));
         Optional<Workload> workload = hasContainer
                 ? get(s, "container").flatMap(c -> container(c, path + ".container", environment))
@@ -356,7 +388,8 @@ public final class ConfigParser {
                 .map(w -> ((Workload.Container) w).ports())
                 .orElse(List.of())
                 .forEach(m -> {
-                    if (!ports.contains(m.hostPort())) {
+                    // Checked for conflicts before starting: TCP ones (a UDP port can't be "taken" the same way).
+                    if (!m.udp() && !ports.contains(m.hostPort())) {
                         ports.add(m.hostPort());
                     }
                 });
@@ -455,9 +488,32 @@ public final class ConfigParser {
                         .forEach(item ->
                                 interpolated(item, path + ".volumes").ifPresent(text -> volumes.add(volume(text)))));
         Optional<String> command = get(c, "command").flatMap(x -> interpolated(x, path + ".command"));
+        Optional<Workload.Build> build = get(c, "build").flatMap(b -> build(b, path + ".build"));
+        Optional<String> entrypoint = get(c, "entrypoint").flatMap(x -> interpolated(x, path + ".entrypoint"));
+        if (build.isPresent() && get(c, "image").isEmpty()) {
+            // Like compose: an image built for a project is called "<project>-<service>".
+            String service = path.replaceFirst("^services\\.", "").replaceFirst("\\.container$", "");
+            String image = (projectName + "-" + service).toLowerCase().replaceAll("[^a-z0-9._-]", "-");
+            return Optional.of(new Workload.Container(image, ports, volumes, command, build, entrypoint));
+        }
         return required(c, "image", path)
                 .flatMap(i -> interpolated(i, path + ".image"))
-                .map(image -> new Workload.Container(image, ports, volumes, command));
+                .map(image -> new Workload.Container(image, ports, volumes, command, build, entrypoint));
+    }
+
+    /** {@code build: ./api} or {@code build: { context: ., dockerfile: api/Dockerfile }}, as in compose. */
+    private Optional<Workload.Build> build(YamlNode node, String path) {
+        if (node instanceof YamlNode.Mapping b) {
+            checkKeys(b, path, BUILD_KEYS);
+            String context =
+                    get(b, "context").flatMap(x -> text(x, path + ".context")).orElse(".");
+            String dockerfile = get(b, "dockerfile")
+                    .flatMap(x -> text(x, path + ".dockerfile"))
+                    .orElse("Dockerfile");
+            return Optional.of(new Workload.Build(root.resolve(context).normalize(), dockerfile));
+        }
+        return text(node, path)
+                .map(context -> new Workload.Build(root.resolve(context).normalize(), "Dockerfile"));
     }
 
     /** "5432:5432", "0.0.0.0:5432:5432" or "5432" (same port on both sides). */
@@ -474,7 +530,8 @@ public final class ConfigParser {
                 problem(node.location(), path, "ports go from 1 to 65535, found \"" + t + "\"");
                 return Optional.empty();
             }
-            return Optional.of(new Workload.PortMapping(m.group(1) == null ? "127.0.0.1" : m.group(1), host, inside));
+            return Optional.of(new Workload.PortMapping(
+                    m.group(1) == null ? "127.0.0.1" : m.group(1), host, inside, "udp".equals(m.group(4))));
         });
     }
 
@@ -713,7 +770,12 @@ public final class ConfigParser {
 
     private Optional<String> interpolated(YamlNode node, String path) {
         return text(node, path).flatMap(t -> switch (Interpolation.resolve(t, env)) {
-            case Interpolation.Result.Resolved r -> Optional.of(r.text());
+            case Interpolation.Result.Resolved r -> {
+                r.unset()
+                        .forEach(v -> warn(path + ": ${" + v + "} isn't set, so it's empty. Set it in .env (or"
+                                + " another env file) if the app needs it"));
+                yield Optional.of(r.text());
+            }
             case Interpolation.Result.Unset u
             when !u.message().isEmpty() -> {
                 problem(

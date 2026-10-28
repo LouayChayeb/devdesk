@@ -13,6 +13,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -59,6 +60,27 @@ public final class TrustStore {
         StringBuilder text = new StringBuilder();
         all.forEach((path, hash) -> text.append(hash).append("  ").append(path).append('\n'));
         writeAtomically(text.toString());
+    }
+
+    /** Every project file DevDesk was ever allowed to run: the projects it knows. */
+    public List<Path> knownFiles() {
+        return read().keySet().stream().map(Path::of).toList();
+    }
+
+    /** Whether this file is trusted at all, whatever its content. */
+    public boolean knows(Path projectFile) {
+        return read().containsKey(key(projectFile));
+    }
+
+    /** Forgets the file: next time it's opened, DevDesk asks again ("Remove" does this). */
+    public void forget(Path projectFile) {
+        Map<String, String> all = read();
+        if (all.remove(key(projectFile)) != null) {
+            StringBuilder text = new StringBuilder();
+            all.forEach(
+                    (path, hash) -> text.append(hash).append("  ").append(path).append('\n'));
+            writeAtomically(text.toString());
+        }
     }
 
     private static String key(Path projectFile) {

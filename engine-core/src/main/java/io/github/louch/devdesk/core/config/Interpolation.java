@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.core.config;
 
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,7 +18,16 @@ final class Interpolation {
 
     /** The text with every variable replaced, or the first variable that had no value. */
     sealed interface Result {
-        record Resolved(String text) implements Result {}
+        /** @param unset variables that weren't set and so became empty, as in compose (said as a warning) */
+        record Resolved(String text, List<String> unset) implements Result {
+            public Resolved {
+                unset = List.copyOf(unset);
+            }
+
+            Resolved(String text) {
+                this(text, List.of());
+            }
+        }
 
         /** {@code message} is the text after {@code ?} in a required variable, empty otherwise. */
         record Unset(String variable, String message) implements Result {}
@@ -28,6 +38,7 @@ final class Interpolation {
     static Result resolve(String text, Map<String, String> env) {
         Matcher m = VARIABLE.matcher(text);
         StringBuilder out = new StringBuilder();
+        List<String> unsetNames = new java.util.ArrayList<>();
         while (m.find()) {
             String name = m.group(1);
             if (name == null) {
@@ -42,11 +53,13 @@ final class Interpolation {
             } else if (unset && "?".equals(operator)) {
                 return new Result.Unset(name, m.group(4).strip()); // required, and the project says why
             } else if (value == null) {
-                return new Result.Unset(name, "");
+                // Like compose: an unset ${VAR} is empty, with a warning. Only ${VAR:?msg} makes it required.
+                unsetNames.add(name);
+                value = "";
             }
             m.appendReplacement(out, Matcher.quoteReplacement(value));
         }
         m.appendTail(out);
-        return new Result.Resolved(out.toString());
+        return new Result.Resolved(out.toString(), unsetNames);
     }
 }
