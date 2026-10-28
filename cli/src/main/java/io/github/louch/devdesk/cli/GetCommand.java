@@ -3,6 +3,7 @@ package io.github.louch.devdesk.cli;
 import io.github.louch.devdesk.core.get.GitLink;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.setup.ExistingSetup;
+import io.github.louch.devdesk.core.setup.FirstRun;
 import io.github.louch.devdesk.core.setup.FolderScan;
 import io.github.louch.devdesk.core.setup.FreePorts;
 import io.github.louch.devdesk.core.setup.FreshSetup;
@@ -166,6 +167,14 @@ final class GetCommand implements Callable<Integer> {
     private boolean propose(Path root, Path file) throws IOException {
         var scan = FolderScan.scan(new DiskFolder(root), root.toString(), List.of());
         var draft = FreePorts.apply(scan.draft(), DiskFolder::portFree);
+        // The framework's first command is a suggestion: asked for on its own, never added silently.
+        for (var card : FirstRun.suggested(draft)) {
+            out.println();
+            out.println(card.notes().isEmpty() ? card.origin() : card.notes().getFirst());
+            if (!ask("Add \"" + card.command() + "\" as the one-time command " + card.name() + "?", true)) {
+                draft = FirstRun.without(draft, card.name());
+            }
+        }
         if (draft.services().isEmpty()) {
             err.println("devdesk: found nothing to run in " + root
                     + " (no docker-compose.yml, Dockerfile, or app DevDesk knows). Write a devdesk.yaml by hand, or"

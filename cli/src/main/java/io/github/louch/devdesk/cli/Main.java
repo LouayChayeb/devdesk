@@ -70,6 +70,14 @@ public final class Main {
                                 System.out,
                                 System.err,
                                 new UpCommand(engine, env, System.out, System.err)))
+                .addSubcommand(
+                        "once",
+                        new OnceCommand(
+                                trust,
+                                stdin,
+                                System.out,
+                                System.err,
+                                new UpCommand(engine, env, System.out, System.err)))
                 .addSubcommand("remove", new RemoveCommand(env, trust, stdin, System.out, System.err))
                 .addSubcommand("history", new HistoryCommand(env, clock, System.out, System.err))
                 .addSubcommand(

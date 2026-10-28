@@ -314,7 +314,10 @@ public final class FolderScan {
             notes.add(
                     "Nothing to start was recognised here. Add a service by hand, or a database with \"Add database\".");
         }
-        return new Result(new SetupDraft(project, List.copyOf(envFiles), services, notes), found, suggestions);
+        // The framework's first command (create the tables), which projects only write in their README.
+        SetupDraft draft =
+                FirstRun.offer(new SetupDraft(project, List.copyOf(envFiles), services, notes), folder::read);
+        return new Result(draft, found, suggestions);
     }
 
     /**

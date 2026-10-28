@@ -932,6 +932,10 @@ export class Engine {
   setupDatabase(kind: string, draft: SetupDraft): Promise<DataAnswer<SetupService>> {
     return this.data('POST', '/setup/database', { kind, draft }, (b) => b);
   }
+  /** A command pasted from the project's docs becomes a one-time card; the engine returns the whole draft. */
+  setupOnce(service: string, command: string, draft: SetupDraft): Promise<DataAnswer<SetupDraft>> {
+    return this.data('POST', '/setup/once', { service, command, draft }, (b) => b);
+  }
   // ---- "Get it running" and "Remove" (the engine clones, plans and deletes) ----
 
   getStart(link: string): Promise<DataAnswer<GetStatus>> {

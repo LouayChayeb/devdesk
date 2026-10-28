@@ -185,6 +185,7 @@ final class ApiServer {
                     "/api/v1/setup/database", ctx -> answer(ctx, setup.addDatabase(ctx.bodyAsClass(Map.class))));
             config.routes.post(
                     "/api/v1/setup/switch", ctx -> answer(ctx, setup.switchKind(ctx.bodyAsClass(Map.class))));
+            config.routes.post("/api/v1/setup/once", ctx -> answer(ctx, setup.addOnce(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/preview", ctx -> answer(ctx, setup.preview(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/doctor", ctx -> answer(ctx, setup.doctor(ctx.bodyAsClass(Map.class))));
             config.routes.post("/api/v1/setup/test", ctx -> answer(ctx, setup.test(ctx.bodyAsClass(Map.class))));

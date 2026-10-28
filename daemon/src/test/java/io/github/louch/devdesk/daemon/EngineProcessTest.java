@@ -69,6 +69,24 @@ class EngineProcessTest {
                     .contains("\"problems\":[]")
                     .contains("api:  container compose-shop-api (built from ");
             assertThat(Path.of(compose, "devdesk.yaml")).doesNotExist();
+            // A command pasted from the project's docs: a one-time card api waits for, and the draft comes back.
+            var once = post(
+                    base + "/setup/once",
+                    token,
+                    ApiJson.write(
+                            Map.of("draft", scanned.get("draft"), "service", "api", "command", "npm run migrate")));
+            assertThat(once.statusCode()).isEqualTo(200);
+            assertThat(once.body())
+                    .contains("\"name\":\"api-prepare\"")
+                    .contains("\"command\":\"npm run migrate\"")
+                    .contains("\"api-prepare\":\"completed_successfully\"");
+            assertThat(post(
+                                    base + "/setup/once",
+                                    token,
+                                    ApiJson.write(
+                                            Map.of("draft", scanned.get("draft"), "service", "nope", "command", "x")))
+                            .statusCode())
+                    .isEqualTo(400);
             assertThat(post(base + "/setup/scan", token, "{\"path\":\"/no/such/folder\"}")
                             .statusCode())
                     .isEqualTo(404);

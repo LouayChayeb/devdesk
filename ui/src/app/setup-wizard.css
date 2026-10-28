@@ -62,11 +62,14 @@ section > .field { max-width: 360px; }
 .menu-anchor { position: relative; }
 .dropdown { position: absolute; top: 30px; left: 0; z-index: 5; background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow-float); padding: 4px; display: flex; flex-direction: column; min-width: 140px; }
 .dropdown .wide { justify-content: flex-start; }
+.dropdown.once { width: 340px; max-width: calc(100vw - 32px); gap: 6px; padding: 8px; }
 
 .card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); padding: 12px; margin-bottom: 10px; }
 .card.bad { border-color: rgba(240, 100, 90, 0.5); }
 .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .card-head .name { font-size: var(--fs-md); font-weight: 500; width: 180px; }
+.suggested { display: flex; align-items: center; gap: 8px; margin: 8px 0; padding: 6px 8px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.suggested > span { flex: 1; min-width: 0; }
 .origin { flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; }
 .env { margin-top: 10px; }

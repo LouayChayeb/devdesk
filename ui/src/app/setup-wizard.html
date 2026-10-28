@@ -100,6 +100,19 @@
                     </div>
                   }
                 </div>
+                <div class="menu-anchor">
+                  <button class="sm" (click)="onceMenu.set(!onceMenu())"><dd-icon name="plus" [size]="12" /> One-time command <dd-icon name="chevronDown" [size]="11" /></button>
+                  @if (onceMenu()) {
+                    <div class="dropdown once">
+                      <span class="dim small">A first command from the project's docs, like <span class="mono">rails db:setup</span>. It runs in a copy of the service, before it starts.</span>
+                      <select class="mono" [value]="onceService() || draft().services[0]?.name" (change)="onceService.set($any($event.target).value)" aria-label="Runs in">
+                        @for (s of draft().services; track s.name) { <option [value]="s.name">{{ s.name }}</option> }
+                      </select>
+                      <input class="mono" placeholder="bundle exec rails db:setup" [value]="onceCommand()" (input)="onceCommand.set($any($event.target).value)" (keydown.enter)="addOnce()" aria-label="Command" />
+                      <button class="sm" [disabled]="!onceCommand().trim()" (click)="addOnce()">Add</button>
+                    </div>
+                  }
+                </div>
                 <span class="dim small">A database gets a free port and a new password. The Data page opens it with no extra setup.</span>
               </div>
 
@@ -114,6 +127,13 @@
                     <span class="origin small dim">{{ s.origin }}</span>
                     <button class="ghost icon sm" title="Remove this service" (click)="remove(i)"><dd-icon name="trash" [size]="13" /></button>
                   </div>
+                  @if (s.origin.startsWith('suggested:')) {
+                    <div class="suggested small">
+                      <span>Suggested by DevDesk: <span class="mono">{{ s.command }}</span> runs once in a copy of the app before it starts. Keep it only if you want it.</span>
+                      <button class="sm" (click)="patch(i, { origin: 'one-time command (kept)' })">Keep</button>
+                      <button class="ghost sm" (click)="remove(i)">Skip</button>
+                    </div>
+                  }
 
                   <div class="grid">
                     @if (s.kind === 'command') {

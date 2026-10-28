@@ -6,6 +6,7 @@ import io.github.louch.devdesk.core.setup.CloudNeeds;
 import io.github.louch.devdesk.core.setup.DatabaseTemplates;
 import io.github.louch.devdesk.core.setup.EnvReport;
 import io.github.louch.devdesk.core.setup.ExistingSetup;
+import io.github.louch.devdesk.core.setup.FirstRun;
 import io.github.louch.devdesk.core.setup.FolderScan;
 import io.github.louch.devdesk.core.setup.FreePorts;
 import io.github.louch.devdesk.core.setup.FreshSetup;
@@ -176,6 +177,29 @@ final class SetupWorkbench {
                 .map(card -> new EngineSession.Answer(200, SetupJson.service(card)))
                 .orElse(new EngineSession.Answer(
                         400, ApiJson.error("unknown kind \"" + kind + "\": use one of " + DatabaseTemplates.KINDS)));
+    }
+
+    /**
+     * A command pasted from a project's docs ("rails db:setup"): a one-time card that runs in a copy of the service,
+     * which the services built from the same code wait for. The whole draft comes back, since those cards change too.
+     */
+    EngineSession.Answer addOnce(Map<?, ?> body) {
+        Optional<SetupDraft> draft = SetupJson.readDraft(body.get("draft"));
+        if (draft.isEmpty()
+                || !(body.get("service") instanceof String service)
+                || !(body.get("command") instanceof String command)) {
+            return new EngineSession.Answer(
+                    400,
+                    ApiJson.error("send {\"draft\": {...}, \"service\": \"web\", \"command\": \"rails db:setup\"}"));
+        }
+        if (command.isBlank()) {
+            return new EngineSession.Answer(400, ApiJson.error("paste the command to run first"));
+        }
+        if (draft.get().services().stream().noneMatch(s -> s.name().equals(service))) {
+            return new EngineSession.Answer(400, ApiJson.error("no service \"" + service + "\" in this setup"));
+        }
+        return new EngineSession.Answer(
+                200, SetupJson.draft(FirstRun.add(draft.get(), service, command, "Pasted from the project's docs.")));
     }
 
     /** A card switched between "runs on this machine" and "runs in a container"; the engine knows both ways. */

@@ -37,6 +37,9 @@ export class SetupWizard implements OnInit {
   readonly error = signal<string | null>(null);
   readonly busy = signal(false);
   readonly dbMenu = signal(false);
+  readonly onceMenu = signal(false);
+  readonly onceService = signal('');
+  readonly onceCommand = signal('');
   /** Step 3 as boxes and arrows, or as tick boxes (keyboard friendly). */
   readonly depsView = signal<'canvas' | 'list'>('canvas');
   readonly revealed = signal<Set<string>>(new Set());
@@ -205,6 +208,21 @@ export class SetupWizard implements OnInit {
       return;
     }
     this.draft.update((d) => ({ ...d, services: [...d.services, r.value] }));
+    this.showLastCard();
+  }
+
+  /** A first command from the project's docs ("rails db:setup"): the engine makes the one-time card. */
+  async addOnce(): Promise<void> {
+    const service = this.onceService() || this.draft().services[0]?.name;
+    if (!service) return;
+    const r = await this.engine.setupOnce(service, this.onceCommand(), this.draft());
+    if (!r.ok) {
+      this.error.set(r.error);
+      return;
+    }
+    this.onceMenu.set(false);
+    this.onceCommand.set('');
+    this.draft.set(r.value);
     this.showLastCard();
   }
 
