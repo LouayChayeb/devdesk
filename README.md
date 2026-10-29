@@ -113,3 +113,7 @@ mail inbox, running on another machine, auto-sleep) are off by default. Turn the
 ## License
 
 [Apache-2.0](LICENSE)
+
+## Credits
+
+Built with the help of Claude Code.

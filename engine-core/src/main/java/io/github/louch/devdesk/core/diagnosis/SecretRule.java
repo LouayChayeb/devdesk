@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 /**
  * A service that fails while one of its secret settings is empty, or missing although its example file lists it:
  * the setting is named, the one its error mentions first. In the 5 hard apps this was the most common real cause,
- * and DevDesk named it 0 times. Only names are shown, never values (CLAUDE.md principle 7).
+ * and DevDesk named it 0 times. Only names are shown, never values: secrets never leak.
  */
 public final class SecretRule implements DiagnosisRule {
 

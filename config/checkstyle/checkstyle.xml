@@ -20,7 +20,7 @@
         <!-- catch (Exception e) {} silently hides failures. DevDesk must fail loudly. -->
         <module name="EmptyCatchBlock"/>
 
-        <!-- Every public class says its job in one sentence (CLAUDE.md, Java style). -->
+        <!-- Every public class says its job in one sentence (the project's Java style). -->
         <module name="MissingJavadocType">
             <property name="scope" value="public"/>
         </module>

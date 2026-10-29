@@ -26,7 +26,7 @@ import java.util.stream.Stream;
  * ({@code <state>/groups/<project key>/<marker>.group}) <em>before</em> starting it, and deletes it once the family is
  * gone. On the next start, a record still there names a family a dead DevDesk left behind.
  *
- * <p>Ownership proof (CLAUDE.md principle 2): every process of the family carries the record's random marker in its
+ * <p>Ownership proof (never kill what we didn't start): every process of the family carries the record's random marker in its
  * environment ({@value #MARKER}, inherited by every child, also one that left the process group with setsid). A
  * process counts only if it carries that exact marker, started after the record's {@code notBefore}, on the same boot
  * (boot id). Group numbers and start times alone aren't enough: once a group dies out, the kernel may give its number

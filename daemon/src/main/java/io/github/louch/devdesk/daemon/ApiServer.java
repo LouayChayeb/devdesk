@@ -1024,7 +1024,7 @@ final class ApiServer {
     /** At most this many rows per page or query result: enough to read, small enough to stay fast. */
     static final int MAX_ROWS = 2000;
 
-    /** Validates a rows request from the app (API input is a boundary: CLAUDE.md §5). */
+    /** Validates a rows request from the app (API input is a boundary: validated here). */
     static Optional<SqlBrowser.RowQuery> rowQuery(Map<?, ?> b) {
         if (!(b.get("schema") instanceof String schema) || !(b.get("table") instanceof String table)) {
             return Optional.empty();

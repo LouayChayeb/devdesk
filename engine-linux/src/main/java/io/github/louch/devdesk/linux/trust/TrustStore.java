@@ -20,7 +20,7 @@ import java.util.Map;
  * Which project folders the user trusts, and for which exact devdesk.yaml content.
  *
  * <p>A devdesk.yaml runs arbitrary commands, so a cloned repo must never start anything until the user has seen
- * what it runs and said yes (CLAUDE.md principle 8). Any change to the file changes its fingerprint and asks again.
+ * what it runs and said yes (explicit trust). Any change to the file changes its fingerprint and asks again.
  * Trust is per file, not per folder: two files in one folder ({@code -f devdesk.broken.yaml}) are separate projects.
  * The list is plain text, one line per file: {@code <sha256>  <absolute path of devdesk.yaml>}.
  */

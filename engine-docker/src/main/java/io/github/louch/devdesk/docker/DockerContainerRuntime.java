@@ -50,7 +50,7 @@ import java.util.function.Consumer;
  * Runs containers through the Docker Engine API (Podman exposes the same API).
  *
  * <p>Ownership: every container DevDesk creates carries the labels {@code devdesk.project} and {@code devdesk.service}.
- * DevDesk only ever stops or removes containers with its own labels, never anything else (CLAUDE.md principle 2).
+ * DevDesk only ever stops or removes containers with its own labels, never anything else.
  */
 public final class DockerContainerRuntime implements ContainerRuntime {
 

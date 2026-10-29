@@ -59,7 +59,7 @@ import java.util.random.RandomGenerator;
  * everything in reverse order.
  *
  * <p>Concurrency: every piece of state below is touched only by {@link #actor}, a single thread that handles one
- * message at a time (the "actor" style, CLAUDE.md principle 4). Slow work (launching, probing, stopping) runs on
+ * message at a time (the "actor" style: one writer per project). Slow work (launching, probing, stopping) runs on
  * virtual threads and sends its result back to the actor as a new message, so nothing ever needs a lock.
  */
 public final class ProjectSupervisor implements AutoCloseable {
@@ -168,7 +168,7 @@ public final class ProjectSupervisor implements AutoCloseable {
             ResourceSampler resources) {}
 
     /**
-     * Knobs, injected so tests can make time and randomness predictable (CLAUDE.md principle 6).
+     * Knobs, injected so tests can make time and randomness predictable.
      *
      * @param baseEnvironment the environment services start from (login env)
      * @param restartBaseDelay first back-off delay (doubles per restart, up to 60 s); tests use a few milliseconds

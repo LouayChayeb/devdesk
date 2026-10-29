@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 
 /**
  * {@code .env.example} lists variables the app expects, but some aren't set. Only names are ever shown, never values
- * (CLAUDE.md principle 7).
+ * (secrets never leak).
  */
 public final class MissingEnvRule implements DiagnosisRule {
 
