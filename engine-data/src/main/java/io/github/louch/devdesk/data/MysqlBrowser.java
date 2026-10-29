@@ -403,7 +403,7 @@ public final class MysqlBrowser implements SqlBrowser {
         return c;
     }
 
-    /** The server's message, plus what DevDesk knows about the likely cause (principle 9). */
+    /** The server's message, plus what DevDesk knows about the likely cause. */
     static DataException explain(DatabaseTarget t, SQLException e) {
         String message = Optional.ofNullable(e.getMessage()).orElse(e.toString());
         String hint = switch (e.getErrorCode()) {

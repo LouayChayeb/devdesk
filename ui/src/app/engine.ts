@@ -784,7 +784,7 @@ type Connection = { port: number; token: string };
 
 const MAX_LINES = 20_000;
 
-/** One store for everything the engine reports, fed by its event stream (DESIGN.md §6). */
+/** One store for everything the engine reports, fed by its event stream. */
 @Injectable({ providedIn: 'root' })
 export class Engine {
   readonly status = signal<'connecting' | 'connected' | 'disconnected'>('connecting');

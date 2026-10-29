@@ -16,7 +16,7 @@ public final class DiagnosisEngine {
         this.rules = List.copyOf(rules);
     }
 
-    /** The v1 rule set (ARCHITECTURE §9). */
+    /** The standard rule set, in the order the rules run. */
     public static DiagnosisEngine standard() {
         return new DiagnosisEngine(List.of(
                 new PortConflictRule(),

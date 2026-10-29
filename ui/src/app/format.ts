@@ -2,7 +2,7 @@
 
 export type Tone = 'ok' | 'ok-ring' | 'warn' | 'warn-ring' | 'err' | 'err-x' | 'idle';
 
-/** DESIGN.md §2 "Status visuals": colour always comes with a distinct shape and a label. */
+/** Status visuals: colour always comes with a distinct shape and a label. */
 export function tone(label: string): Tone {
   switch (label) {
     case 'healthy':

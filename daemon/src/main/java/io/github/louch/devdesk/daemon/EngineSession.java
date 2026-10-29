@@ -837,7 +837,7 @@ final class EngineSession implements AutoCloseable {
     }
 
     /**
-     * One environment value, only when the user explicitly asks for it (principle 7: never shown by default). Not
+     * One environment value, only when the user explicitly asks for it (secrets are never shown by default). Not
      * recorded anywhere.
      */
     synchronized Answer reveal(String name, String key) {
@@ -871,7 +871,7 @@ final class EngineSession implements AutoCloseable {
                             ProjectLoader.commands(l.project()))));
         }
         if (supervisor.isEmpty()) {
-            // The flight recorder (ADR 0008): the same events the window shows are kept for `devdesk history`.
+            // The flight recorder: the same events the window shows are kept for `devdesk history`.
             recorder = Optional.of(
                     new Recorder(JsonlHistoryStore.forProject(engine.environment(), l.project()), engine.clock()));
             Optional<ContainerRuntime> containers = containers(l);
@@ -997,7 +997,7 @@ final class EngineSession implements AutoCloseable {
                 "passed", report.passed());
     }
 
-    /** The flight recorder's timeline (ADR 0008), like `devdesk history`. Readable even while nothing runs. */
+    /** The flight recorder's timeline, like `devdesk history`. Readable even while nothing runs. */
     synchronized Answer history(Duration back) {
         if (project.isEmpty()) {
             return new Answer(404, ApiJson.error("no project is open"));

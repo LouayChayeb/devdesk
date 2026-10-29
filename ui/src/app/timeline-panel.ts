@@ -3,7 +3,7 @@ import { Engine, History, HistoryItem } from './engine';
 import { bytes, time } from './format';
 import { StartupChart } from './startup-chart';
 
-/** The flight recorder's timeline (ADR 0008), like `devdesk history`. The engine decides what's routine or unclean. */
+/** The flight recorder's timeline, like `devdesk history`. The engine decides what's routine or unclean. */
 @Component({
   selector: 'dd-timeline',
   imports: [StartupChart],

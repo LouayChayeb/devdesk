@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
 
 /**
  * The wizard's settings step: what the .env files hold, which variables the setup needs but nobody defines, and which
- * keys .env.example promises but .env lacks. Secret-looking values never leave the engine (principle 7).
+ * keys .env.example promises but .env lacks. Secret-looking values never leave the engine.
  */
 public final class EnvReport {
 

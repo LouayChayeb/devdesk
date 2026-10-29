@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Runs processes on Linux so that DevDesk always owns the whole family a command starts (ADR 0002).
+ * Runs processes on Linux so that DevDesk always owns the whole family a command starts.
  *
  * <p>Each command runs as {@code [systemd-run --user --scope ...] setsid /bin/sh -c "<command>"}: the systemd scope
  * (a cgroup) holds every descendant, and {@code setsid} gives the command its own process group and session.

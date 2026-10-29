@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit, computed, inject, input, signal } from '@angular/core';
 import { Engine, PortRow } from './engine';
 
-/** DESIGN.md §4.6: every listening port on the machine and its owner. The engine decides owners and conflicts. */
+/** Every listening port on the machine and its owner. The engine decides owners and conflicts. */
 @Component({
   selector: 'dd-ports',
   template: `

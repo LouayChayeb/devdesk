@@ -1,7 +1,7 @@
 import { Component, computed, input } from '@angular/core';
 import { tone } from './format';
 
-/** The status dot from DESIGN.md: solid, ring, pulsing or crossed, never colour alone. */
+/** The status dot: solid, ring, pulsing or crossed, never colour alone. */
 @Component({
   selector: 'dd-dot',
   template: `<span class="dot {{ cls() }}" [attr.aria-label]="label()"></span>`,

@@ -4,7 +4,7 @@ import { StatusDot } from './status-dot';
 import { Icon } from './icon';
 import { bytes, cpu } from './format';
 
-/** DESIGN.md §4.3: one row per service, every value straight from the engine. */
+/** One row per service, every value straight from the engine. */
 @Component({
   selector: 'dd-services',
   imports: [StatusDot, Icon],

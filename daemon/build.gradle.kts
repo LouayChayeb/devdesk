@@ -1,6 +1,6 @@
 // daemon: the composition root. It is the only module allowed to know every adapter,
 // because it constructs them and hands them to core (manual constructor injection).
-// Since ADR 0005 it isn't a background daemon: the desktop app starts it as its "engine" and stops it on close.
+// It isn't a background daemon: the desktop app starts it as its "engine" and stops it on close.
 plugins {
     id("devdesk.java-conventions")
     id("devdesk.mutation")

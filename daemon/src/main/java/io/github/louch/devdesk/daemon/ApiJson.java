@@ -267,7 +267,7 @@ final class ApiJson {
         return m;
     }
 
-    /** The service drawer (DESIGN.md §4.4). Environment values are never in it, only keys and where they came from. */
+    /** The service drawer. Environment values are never in it, only keys and where they came from. */
     static Map<String, Object> serviceDetails(
             ServiceSpec spec,
             Optional<ProjectSupervisor.ServiceDetails> details,

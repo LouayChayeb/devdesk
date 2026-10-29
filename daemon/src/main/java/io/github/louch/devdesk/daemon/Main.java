@@ -60,7 +60,7 @@ import java.util.Optional;
  * Entry point of {@code devdeskd}, the engine the desktop app starts. Wires every dependency by hand.
  *
  * <p>It prints one line, {@code {"port":...,"token":...}}, so the app knows where to connect. It stops every service
- * and exits when its stdin closes, which happens when the app exits or crashes (ADR 0005: close DevDesk = stop all).
+ * and exits when its stdin closes, which happens when the app exits or crashes (closing DevDesk stops everything).
  */
 public final class Main {
 

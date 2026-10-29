@@ -153,7 +153,7 @@ class LinuxProcessRuntimeTest {
 
         new GracefulStop(runtime).stop(p, GRACE);
 
-        // Documented in ADR 0002: process groups can't hold a process that calls setsid itself.
+        // A known limit: process groups can't hold a process that calls setsid itself.
         assertThat(escaper.isAlive()).isTrue();
         escaper.destroyForcibly(); // clean up: we started it, so we may kill it by its exact PID
     }

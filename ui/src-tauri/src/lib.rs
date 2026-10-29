@@ -1,6 +1,6 @@
 //! The desktop shell. It only starts the DevDesk engine (`devdeskd`), tells the UI where it listens,
 //! and keeps the engine's stdin open. When this app exits (or crashes), the OS closes that pipe and the engine
-//! stops every service (ADR 0005: closing DevDesk stops everything). No other logic lives here.
+//! stops every service (closing DevDesk stops everything). No other logic lives here.
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};

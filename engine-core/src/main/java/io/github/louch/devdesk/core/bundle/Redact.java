@@ -8,7 +8,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Takes secrets out of text before it leaves the machine (principle 7): values of secret-looking settings in
+ * Takes secrets out of text before it leaves the machine: values of secret-looking settings in
  * devdesk.yaml, passwords inside connection URLs, and any secret value wherever it appears in a log line.
  */
 public final class Redact {

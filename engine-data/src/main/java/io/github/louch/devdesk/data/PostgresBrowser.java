@@ -498,7 +498,7 @@ public final class PostgresBrowser implements SqlBrowser {
         return DriverManager.getConnection(url, p);
     }
 
-    /** Postgres's own message, plus what DevDesk knows about the likely cause (principle 9). */
+    /** Postgres's own message, plus what DevDesk knows about the likely cause. */
     static DataException explain(DatabaseTarget t, SQLException e) {
         String state = Optional.ofNullable(e.getSQLState()).orElse("");
         String message = Optional.ofNullable(e.getMessage()).orElse(e.toString());

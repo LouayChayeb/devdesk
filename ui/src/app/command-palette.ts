@@ -19,7 +19,7 @@ interface Entry {
   command: PaletteCommand;
 }
 
-/** DESIGN.md §4.9: type a few letters of "restart api", "logs web" or "port 5432". Searching only; no decisions. */
+/** The command palette: type a few letters of "restart api", "logs web" or "port 5432". Searching only; no decisions. */
 @Component({
   selector: 'dd-palette',
   template: `

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The exact score, confidence and reason of each kind of change against each kind of failure: the numbers
- * EXPLANATION.md §12.3 documents. A change of scoring must change this test on purpose.
+ * the verdict uses. A change of scoring must change this test on purpose.
  */
 class VerdictScoringTest {
 

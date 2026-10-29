@@ -7,7 +7,7 @@
 @import "@fontsource/jetbrains-mono/latin-400.css";
 @import "@fontsource/jetbrains-mono/latin-500.css";
 
-/* Design tokens from docs/DESIGN.md §2. Components use only these, never raw colours. */
+/* Design tokens. Components use only these, never raw colours. */
 :root {
   /* Palette: dark charcoal surfaces with a teal accent (chosen by louay, 2026-10-07). */
   --bg-0: #101316;

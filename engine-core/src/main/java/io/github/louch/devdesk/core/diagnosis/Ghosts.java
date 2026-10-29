@@ -14,7 +14,7 @@ import java.util.TreeSet;
 
 /**
  * "Ghosts": your own processes running in a project's folder that DevDesk didn't start, like an `npm run dev` left
- * running in another terminal. They are only reported, never stopped: DevDesk didn't start them (principle 2).
+ * running in another terminal. They are only reported, never stopped: DevDesk never stops what it didn't start.
  */
 public final class Ghosts {
 

@@ -8,7 +8,7 @@ import java.util.List;
  * Cleans up what a dead DevDesk left behind for a project, before it starts again.
  *
  * <p>Only call this while holding the project's lock: then no living DevDesk owns these processes, so they are
- * survivors, and stopping them is safe (they're provably DevDesk's own, principle 2).
+ * survivors, and stopping them is safe (they're provably DevDesk's own).
  */
 public final class Survivors {
 

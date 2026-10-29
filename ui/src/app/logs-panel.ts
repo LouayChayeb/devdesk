@@ -6,7 +6,7 @@ import { Icon } from './icon';
 
 const ERROR_WORDS = /\b(error|exception|fatal|panic|traceback)\b/i;
 
-/** DESIGN.md §4.8: virtual scrolling, follows the tail, pauses when scrolled up, stderr marked. */
+/** Logs: virtual scrolling, follows the tail, pauses when scrolled up, stderr marked. */
 @Component({
   selector: 'dd-logs',
   imports: [ScrollingModule, Icon],

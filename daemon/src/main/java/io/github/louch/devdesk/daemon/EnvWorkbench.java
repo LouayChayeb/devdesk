@@ -26,7 +26,7 @@ import java.util.stream.Stream;
 
 /**
  * The .env editor of the open project: every env file, which service uses which variable, what's missing. Secret-looking
- * values stay in the engine until the user clicks "show" (principle 7); edits keep the file's comments and order.
+ * values stay in the engine until the user clicks "show" (secrets never leak); edits keep the file's comments and order.
  */
 final class EnvWorkbench {
 

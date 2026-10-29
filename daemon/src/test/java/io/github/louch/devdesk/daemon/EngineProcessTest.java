@@ -140,7 +140,7 @@ class EngineProcessTest {
             List<Long> pids = reportedPids(events);
             assertThat(pids).hasSize(3).allMatch(EngineProcessTest::alive);
 
-            // The flight recorder's views (ADR 0008): the timeline has this session, the machine view answers.
+            // The flight recorder's views: the timeline has this session, the machine view answers.
             var history = get(base + "/project/history?hours=1", token);
             assertThat(history.statusCode()).isEqualTo(200);
             assertThat(history.body()).contains("\"kind\":\"session\"").contains("\"service\":\"web\"");
@@ -155,7 +155,7 @@ class EngineProcessTest {
                     .contains("\"port\":5433,")
                     .contains("\"owner\":\"this-project\",\"who\":\"db\"");
 
-            // The service drawer: keys and their source, never values (principle 7), unless explicitly revealed.
+            // The service drawer: keys and their source, never values, unless explicitly revealed.
             var db = get(base + "/services/db", token);
             assertThat(db.statusCode()).isEqualTo(200);
             assertThat(db.body())

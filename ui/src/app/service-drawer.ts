@@ -7,7 +7,7 @@ import { bytes, cpu, time } from './format';
 
 type Section = 'overview' | 'health' | 'resources' | 'ports' | 'environment' | 'dependencies';
 
-/** DESIGN.md §4.4: everything about one service, as the engine reports it. Values of variables only on request. */
+/** Everything about one service, as the engine reports it. Values of variables only on request. */
 @Component({
   selector: 'dd-drawer',
   imports: [StatusDot, Icon, NgTemplateOutlet],

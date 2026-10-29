@@ -23,7 +23,7 @@ public final class ServiceEnvironment {
         SERVICE
     }
 
-    /** One variable. The value stays inside the engine unless the user explicitly reveals it (principle 7). */
+    /** One variable. The value stays inside the engine unless the user explicitly reveals it. */
     public record Variable(String key, String value, Source source) {
 
         /** Names that usually hold secrets: shown with a warning, and never logged. */

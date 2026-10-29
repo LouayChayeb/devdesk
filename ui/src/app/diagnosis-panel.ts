@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit, computed, inject, input, output, signal }
 import { Engine, Finding, MigrationSource, Verdict } from './engine';
 import { saveAnyPath } from './files';
 
-/** DESIGN.md §4.7: finding cards, root cause first; fixes are copy-only, never run from here. */
+/** Finding cards, root cause first; fixes are copy-only, never run from here. */
 @Component({
   selector: 'dd-diagnosis',
   template: `

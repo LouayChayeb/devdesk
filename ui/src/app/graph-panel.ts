@@ -31,7 +31,7 @@ interface Edge {
 }
 
 /**
- * DESIGN.md §4.5: the dependency graph. Rows, "needs" and "impact" come from the engine; everything here is drawing
+ * The dependency graph. Rows, "needs" and "impact" come from the engine; everything here is drawing
  * (positions, pan and zoom).
  */
 @Component({
