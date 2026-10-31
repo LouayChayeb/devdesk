@@ -274,8 +274,7 @@ public final class Doctor {
         Map<Path, List<ServiceSpec>> byFolder = new LinkedHashMap<>();
         for (ServiceSpec s : project.services().values()) {
             if (s.workload() instanceof Workload.Command cmd
-                    && Set.of("npm", "npx", "pnpm", "yarn", "node")
-                            .contains(cmd.commandLine().strip().split("\\s+")[0])) {
+                    && Set.of("npm", "npx", "pnpm", "yarn", "node").contains(ToolNeeds.program(cmd.commandLine()))) {
                 byFolder.computeIfAbsent(s.directory(), d -> new ArrayList<>()).add(s);
             }
         }

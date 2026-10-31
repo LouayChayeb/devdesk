@@ -73,6 +73,38 @@ class DoctorTest {
     }
 
     @Test
+    void versionsAreCheckedForCommandsTheWizardWritesWithCorepackOrAVenv() throws Exception {
+        // Found on outline: its card runs "corepack yarn dev" and package.json needs Node >=24.22.1, but the machine
+        // check said "All good" with Node 24.21.0: "corepack" wasn't recognised as Node. Same for .venv/bin/python3.
+        var project = ConfigParser.parse("""
+                version: 1
+                services:
+                  web: { command: corepack yarn dev }
+                  hc: { command: .venv/bin/python3 manage.py runserver, directory: hc }
+                """, Path.of("/p"), Map.of(), f -> Optional.empty());
+
+        var report = Doctor.check(
+                project,
+                facts(
+                        Map.of(
+                                "/p/package.json",
+                                "{\"engines\": {\"node\": \">=22.23.4 <23 || >=24.22.1 <25\"}}",
+                                "/p/hc/.python-version",
+                                "3.13\n"),
+                        Map.of("node", "v24.21.0", "python", "Python 3.12.3"),
+                        50 * Doctor.GIB),
+                List.of());
+
+        assertThat(report.problems())
+                .extracting(Finding::title)
+                .contains(
+                        "Node 24.21.0 found, web needs >=22.23.4 <23 || >=24.22.1 <25",
+                        "Python 3.12.3 found, hc needs 3.13")
+                // corepack brings yarn: no "install yarn"
+                .noneMatch(t -> t.toLowerCase().contains("yarn"));
+    }
+
+    @Test
     void theWrongVersionsAreNamedWithWhereTheRequirementComesFrom() throws Exception {
         var report = Doctor.check(
                 project(),

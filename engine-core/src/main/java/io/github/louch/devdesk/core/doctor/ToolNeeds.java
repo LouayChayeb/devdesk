@@ -62,11 +62,13 @@ public final class ToolNeeds {
             if (!(s.workload() instanceof Workload.Command cmd)) {
                 continue;
             }
-            String program = cmd.commandLine().strip().split("\\s+")[0];
+            String program = program(cmd.commandLine());
             switch (program) {
                 case "npm", "npx", "node", "pnpm", "yarn" -> {
                     needs.add(node(s.name(), here, where));
-                    if (program.equals("pnpm") || program.equals("yarn")) {
+                    // Through corepack the pinned yarn/pnpm comes with Node: nothing else to install.
+                    if ((program.equals("pnpm") || program.equals("yarn"))
+                            && !cmd.commandLine().strip().startsWith("corepack ")) {
                         needs.add(new Need(program, s.name(), Optional.empty(), "devdesk.yaml"));
                     }
                 }
@@ -185,5 +187,16 @@ public final class ToolNeeds {
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * The program a command line runs, seen through what the setup wizard puts in front of it: "corepack yarn dev"
+     * runs yarn (corepack only picks its version), ".venv/bin/python3 manage.py" runs python3. Without this the
+     * version checks miss exactly the services the wizard set up.
+     */
+    static String program(String commandLine) {
+        String[] words = commandLine.strip().split("\\s+");
+        String program = words[0].equals("corepack") && words.length > 1 ? words[1] : words[0];
+        return program.startsWith(".venv/bin/") ? program.substring(".venv/bin/".length()) : program;
     }
 }
