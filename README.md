@@ -90,9 +90,9 @@ adapters behind interfaces, so the core is tested with fakes.
 Runs on Linux. Tested on **Ubuntu 24.04** and on **Windows through WSL2** (Ubuntu). macOS is not supported.
 Prebuilt installers (.deb, AppImage) will come with the first release; for now, build from source.
 
-Needs git and JDK 25. Docker or Podman only if your projects use containers (the example project does). A systemd
-user session (most Linux desktops; WSL2 with `systemd=true` in `/etc/wsl.conf`) gives the strongest cleanup guarantee.
-On Ubuntu 24.04:
+Needs git and JDK 25. Docker or Podman only if your projects use containers (the example project does:
+[install Docker](https://docs.docker.com/engine/install/ubuntu/)). A systemd user session (most Linux desktops; WSL2
+with `systemd=true` in `/etc/wsl.conf`) gives the strongest cleanup guarantee. On Ubuntu 24.04:
 
 ```bash
 sudo apt install git openjdk-25-jdk python3          # python3 is only for the example project
