@@ -91,4 +91,27 @@ class GhostsTest {
             assertThat(f.actions().getFirst()).isEqualTo("stop it in that terminal (Ctrl+C), or: kill 4121");
         });
     }
+
+    @Test
+    void portHeldByAnotherServiceDevDeskStartedIsNotStartedByHand() throws Exception {
+        // Found on excalidraw: its docs card ran `yarn serve`, whose docusaurus took port 3000, the port the app's
+        // container needed. Same folder, but DevDesk's own scope holds it: blaming "a terminal" sent people looking
+        // for a process they never started.
+        process(3664, 3600, "node docusaurus serve", "/work/shop/dev-docs", NOW.minusSeconds(360));
+        machine.devdeskProjects.put(3664L, project().key());
+        machine.listeners.put(
+                3001, new Listener(3001, "127.0.0.1", 1000, Optional.of(3664L), Optional.of("node docusaurus serve")));
+        var ctx = new DiagnosisContext(
+                project(), Map.of("api", new ServiceState.Stopped()), Map.of(), Map.of(), machine, NOW);
+
+        var finding = new PortConflictRule().evaluate(ctx, "api");
+
+        assertThat(finding).singleElement().satisfies(f -> {
+            assertThat(f.explanation())
+                    .isEqualTo("api needs port 3001, but it's taken by another service of this project, `node"
+                            + " docusaurus serve` (PID 3664), which DevDesk started: two services of this project"
+                            + " want the same port.");
+            assertThat(f.actions().getFirst()).startsWith("give one of them another port");
+        });
+    }
 }

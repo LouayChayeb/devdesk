@@ -19,6 +19,8 @@ final class FakeIntrospection implements Introspection {
     final Map<Path, FileStatus> fileStatuses = new HashMap<>();
     final Map<Long, ProcessInfo> processes = new HashMap<>();
     final List<Connection> connections = new ArrayList<>();
+    /** PID → the key of the DevDesk project whose scope holds it. */
+    final Map<Long, String> devdeskProjects = new HashMap<>();
 
     @Override
     public List<Listener> allListeners() {
@@ -27,7 +29,7 @@ final class FakeIntrospection implements Introspection {
 
     @Override
     public Optional<String> devdeskProjectOf(long pid) {
-        return Optional.empty();
+        return Optional.ofNullable(devdeskProjects.get(pid));
     }
 
     @Override

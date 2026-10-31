@@ -24,6 +24,23 @@ public final class PortOwners {
      */
     public static Explanation explain(Listener l, Introspection system, ProjectSpec project, Instant now) {
         Optional<ProcessInfo> info = l.pid().flatMap(system::process);
+        // A DevDesk scope names the project that started the process (also a grandchild like `yarn serve` →
+        // docusaurus). Then it's never "started by hand": two of DevDesk's own services want the same port.
+        Optional<String> startedBy = l.pid().flatMap(system::devdeskProjectOf);
+        if (info.isPresent() && startedBy.isPresent()) {
+            ProcessInfo p = info.get();
+            return startedBy.get().equals(project.key())
+                    ? new Explanation(
+                            "another service of this project, `" + p.command() + "` (PID " + p.pid()
+                                    + "), which DevDesk started: two services of this project want the same port",
+                            "give one of them another port in devdesk.yaml (and in its own settings)",
+                            true)
+                    : new Explanation(
+                            "`" + p.command() + "` (PID " + p.pid() + "), a service of another DevDesk project ("
+                                    + startedBy.get() + ")",
+                            "stop that project first, or change the port here",
+                            false);
+        }
         Optional<Path> folder = info.flatMap(ProcessInfo::workingDirectory)
                 .filter(d -> d.startsWith(project.root().toAbsolutePath().normalize()));
         if (info.isPresent() && folder.isPresent()) {
