@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Builds a project's image from its Dockerfile with the {@code docker build} command, not Docker's HTTP API: the
@@ -76,7 +77,7 @@ final class ImageBuilder {
             output.accept(new OutputLine(StreamKind.STDERR, "[devdesk] built " + image));
             return;
         }
-        if (!offline(first.last())) {
+        if (!first.offline()) {
             throw new LaunchException(explain(image, first.step(), first.last()), null);
         }
         // On WSL (and some VPNs) the DNS server the machine uses can't be reached from Docker's build network.
@@ -94,8 +95,11 @@ final class ImageBuilder {
         output.accept(new OutputLine(StreamKind.STDERR, "[devdesk] built " + image));
     }
 
-    /** One run of the build: its exit code, the step it was on, and its last lines. */
-    private record Attempt(int code, String step, List<String> last) {}
+    /**
+     * One run of the build: its exit code, the step it was on, its last lines, and whether any line said the network
+     * was unreachable (yarn prints that well before Docker's own closing lines).
+     */
+    private record Attempt(int code, String step, List<String> last, boolean offline) {}
 
     private Attempt run(List<String> cmd, String image, Consumer<OutputLine> output) throws LaunchException {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
@@ -109,6 +113,7 @@ final class ImageBuilder {
         }
         Deque<String> last = new ArrayDeque<>();
         String step = "";
+        boolean offline = false;
         try (BufferedReader in =
                 new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
             for (String line = in.readLine(); line != null; line = in.readLine()) {
@@ -117,12 +122,13 @@ final class ImageBuilder {
                 if (m.matches() && !m.group(2).equals("DONE")) {
                     step = m.group(1) + " (" + m.group(2) + ")";
                 }
+                offline = offline || offline(List.of(line));
                 last.addLast(line);
                 if (last.size() > LAST_LINES) {
                     last.removeFirst();
                 }
             }
-            return new Attempt(p.waitFor(), step, List.copyOf(last));
+            return new Attempt(p.waitFor(), step, List.copyOf(last), offline);
         } catch (IOException e) {
             throw new LaunchException("can't build " + image + ": " + e.getMessage(), e);
         } catch (InterruptedException e) {
@@ -134,12 +140,27 @@ final class ImageBuilder {
         }
     }
 
-    private static boolean offline(List<String> last) {
+    /**
+     * Whether the build failed because it couldn't reach the internet. Each tool words it its own way: pip and curl
+     * ("temporary failure in name resolution", "could not resolve"), apt ("temporary failure resolving"), npm and
+     * yarn ("getaddrinfo EAI_AGAIN", "ENOTFOUND"; found on excalidraw), Go ("no such host"), busybox ("bad address").
+     */
+    static boolean offline(List<String> last) {
         String text = String.join("\n", last).toLowerCase();
-        return text.contains("temporary failure in name resolution")
-                || text.contains("i/o timeout")
-                || text.contains("could not resolve")
-                || text.contains("tls handshake timeout");
+        return Stream.of(
+                        "temporary failure in name resolution",
+                        "temporary failure resolving",
+                        "i/o timeout",
+                        "could not resolve",
+                        "tls handshake timeout",
+                        "eai_again",
+                        "enotfound",
+                        "getaddrinfo",
+                        "no such host",
+                        "name or service not known",
+                        "bad address",
+                        "network is unreachable")
+                .anyMatch(text::contains);
     }
 
     /** Which step failed, the lines that say why, and the usual cause behind them. */

@@ -45,6 +45,21 @@ class ImageBuilderTest {
     }
 
     @Test
+    void networkFailuresOfEveryToolAreRecognisedSoTheBuildRetriesOnTheHostNetwork() {
+        // Found on excalidraw: yarn's "getaddrinfo EAI_AGAIN" wasn't recognised, so a build that only needed the
+        // host network (WSL: Docker's build network can't resolve names) failed without the retry.
+        assertThat(List.of(
+                        "error Error: getaddrinfo EAI_AGAIN registry.yarnpkg.com",
+                        "npm error code ENOTFOUND",
+                        "W: Temporary failure resolving 'archive.ubuntu.com'",
+                        "dial tcp: lookup proxy.golang.org on 10.255.255.254:53: no such host",
+                        "nslookup: can't resolve 'x': bad address"))
+                .allMatch(line -> ImageBuilder.offline(List.of(line)));
+        assertThat(ImageBuilder.offline(List.of("npm ERR! missing script: build")))
+                .isFalse();
+    }
+
+    @Test
     void aMissingFileAndAFullDiskAreSaidPlainly() {
         assertThat(ImageBuilder.explain(
                         "web",
