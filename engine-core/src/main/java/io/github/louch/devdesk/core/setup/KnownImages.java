@@ -25,7 +25,14 @@ final class KnownImages {
         if (DatabaseTargets.isMysqlImage(image)) {
             // mysqladmin answers "mysqld is alive" even when the password is wrong: enough to know it's up.
             // The first start creates the system tables: MySQL 9 took over a minute for that on a real project.
-            return Optional.of(SetupDraft.Health.command(exec + "mysqladmin ping -h 127.0.0.1 --silent", "120s"));
+            // MariaDB 11 images have only mariadb-admin (found on directus: "mysqladmin: command not found", so the
+            // database never counted as healthy); older ones only mysqladmin. The shell tries both.
+            return Optional.of(SetupDraft.Health.command(
+                    image.toLowerCase().contains("mariadb")
+                            ? exec + "sh -c 'mariadb-admin ping -h 127.0.0.1 --silent || mysqladmin ping -h 127.0.0.1"
+                                    + " --silent'"
+                            : exec + "mysqladmin ping -h 127.0.0.1 --silent",
+                    "120s"));
         }
         if (DatabaseTargets.isRedisImage(image)) {
             return Optional.of(SetupDraft.Health.command(exec + "redis-cli ping", "20s"));
