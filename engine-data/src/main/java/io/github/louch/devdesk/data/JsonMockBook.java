@@ -28,6 +28,7 @@ public final class JsonMockBook implements MockBook {
         this.file = file;
     }
 
+    /** The mock routes of one project, in {@code mocks/<project key>.json} in DevDesk's state folder. */
     public static JsonMockBook forProject(Map<String, String> env, ProjectSpec project) {
         return new JsonMockBook(StateFolder.of(env).resolve("mocks").resolve(project.key() + ".json"));
     }

@@ -34,6 +34,10 @@ public final class SharedRequestBook implements RequestBook {
         this.folder = folder;
     }
 
+    /**
+     * The requests of one project: private ones in DevDesk's state folder, shared collections in {@code
+     * .devdesk/requests/}.
+     */
     public static SharedRequestBook forProject(Map<String, String> env, ProjectSpec project) {
         return new SharedRequestBook(
                 JsonRequestBook.forProject(env, project),

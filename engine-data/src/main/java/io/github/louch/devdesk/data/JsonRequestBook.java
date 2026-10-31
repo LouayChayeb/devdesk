@@ -34,6 +34,7 @@ public final class JsonRequestBook implements RequestBook {
         this.file = file;
     }
 
+    /** The requests of one project, in {@code requests/<project key>.json} in DevDesk's state folder. */
     public static JsonRequestBook forProject(Map<String, String> env, ProjectSpec project) {
         return new JsonRequestBook(StateFolder.of(env).resolve("requests").resolve(project.key() + ".json"));
     }

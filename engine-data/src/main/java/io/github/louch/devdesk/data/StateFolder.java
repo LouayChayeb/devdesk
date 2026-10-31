@@ -8,6 +8,7 @@ public final class StateFolder {
 
     private StateFolder() {}
 
+    /** DevDesk's state folder for this environment. Only builds the path; the folder may not exist yet. */
     public static Path of(Map<String, String> env) {
         String state = env.getOrDefault("XDG_STATE_HOME", "");
         Path base = state.isBlank() ? Path.of(env.getOrDefault("HOME", "/tmp"), ".local", "state") : Path.of(state);

@@ -25,6 +25,7 @@ public final class JsonSavedQueries implements SavedQueries {
         this.file = file;
     }
 
+    /** The saved queries of one project, in {@code queries/<project key>.json} in DevDesk's state folder. */
     public static JsonSavedQueries forProject(Map<String, String> env, ProjectSpec project) {
         return new JsonSavedQueries(StateFolder.of(env).resolve("queries").resolve(project.key() + ".json"));
     }
