@@ -21,6 +21,7 @@ public final class HttpCallJson {
 
     private HttpCallJson() {}
 
+    /** The call as JSON-ready maps and lists, the shape {@link #read} reads back. */
     public static Map<String, Object> write(HttpCall c) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("method", c.method());
@@ -69,6 +70,9 @@ public final class HttpCallJson {
         return m;
     }
 
+    /**
+     * The call in {@code b}, or empty when the method or the URL is missing or not valid. Unknown fields are ignored.
+     */
     public static Optional<HttpCall> read(Map<?, ?> b) {
         if (!(b.get("method") instanceof String method)
                 || !METHODS.contains(method.toUpperCase(Locale.ROOT))
@@ -125,6 +129,7 @@ public final class HttpCallJson {
         return Optional.of(new HttpCall(method.toUpperCase(Locale.ROOT), url.strip(), headers, body, auth));
     }
 
+    /** The checks as JSON-ready maps, the shape the request files and the app use. */
     public static List<Map<String, Object>> writeChecks(List<ResponseRules.Check> checks) {
         return checks.stream()
                 .map(c -> {
@@ -138,6 +143,7 @@ public final class HttpCallJson {
                 .toList();
     }
 
+    /** The captures as JSON-ready maps, the shape {@link #readCaptures} reads back. */
     public static List<Map<String, Object>> writeCaptures(List<ResponseRules.Capture> captures) {
         return captures.stream()
                 .map(c -> {
@@ -168,6 +174,7 @@ public final class HttpCallJson {
         return out;
     }
 
+    /** The captures in {@code o}; entries with a bad variable name or an unknown part are skipped. */
     public static List<ResponseRules.Capture> readCaptures(Object o) {
         List<ResponseRules.Capture> out = new ArrayList<>();
         if (o instanceof List<?> list) {

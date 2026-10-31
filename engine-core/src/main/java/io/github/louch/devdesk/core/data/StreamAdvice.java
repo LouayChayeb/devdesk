@@ -17,6 +17,10 @@ public final class StreamAdvice {
 
     private StreamAdvice() {}
 
+    /**
+     * Hints about stream {@code key}: stuck consumers, groups falling behind, groups nobody reads. Empty when all is
+     * well.
+     */
     public static List<String> of(String key, KeyValueBrowser.StreamInfo s) {
         List<String> out = new ArrayList<>();
         for (KeyValueBrowser.Group g : s.groups()) {

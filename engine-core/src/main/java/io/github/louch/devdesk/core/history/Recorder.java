@@ -40,6 +40,7 @@ public final class Recorder implements Consumer<ProjectEvent> {
                 Map.of("event", "started")));
     }
 
+    /** Writes the "DevDesk stopped" entry, so the flight recorder shows where a session ended and why. */
     public void sessionEnded(String reason) {
         store.append(new HistoryEntry(
                 clock.instant(),

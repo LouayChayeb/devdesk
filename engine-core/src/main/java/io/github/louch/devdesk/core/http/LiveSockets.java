@@ -13,6 +13,7 @@ public interface LiveSockets {
 
     /** What happens on a connection, as it happens. */
     interface Listener {
+        /** The connection is open; {@code protocol} is the subprotocol the server picked, or "". */
         void opened(String protocol);
 
         /** @param binary the message was binary: {@code text} then describes it ("12 bytes") */
@@ -27,6 +28,7 @@ public interface LiveSockets {
 
     /** An open (or opening) connection. */
     interface Connection {
+        /** Sends one text message. */
         void send(String text);
 
         /** Closes politely (code 1000); a connection that never opened is just dropped. */

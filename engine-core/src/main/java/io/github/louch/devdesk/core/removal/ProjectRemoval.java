@@ -48,6 +48,7 @@ public final class ProjectRemoval {
             leftovers = List.copyOf(leftovers);
         }
 
+        /** True when everything was deleted and the second look found nothing left. */
         public boolean clean() {
             return failed.isEmpty() && leftovers.isEmpty();
         }
@@ -59,6 +60,9 @@ public final class ProjectRemoval {
         this.ports = List.copyOf(ports);
     }
 
+    /**
+     * What would be deleted and what is kept on purpose. Deletes nothing; an adapter that fails is skipped, not fatal.
+     */
     public Plan plan(ProjectSpec project, boolean cloned) {
         List<Removable> all = new ArrayList<>();
         ports.forEach(p -> all.addAll(safeFind(p, project, cloned)));

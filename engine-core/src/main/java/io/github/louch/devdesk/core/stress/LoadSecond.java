@@ -22,6 +22,7 @@ public record LoadSecond(
         errorKinds = Map.copyOf(errorKinds);
     }
 
+    /** Failed requests as a share of all requests in this second, 0 to 1 (0 when nothing was sent). */
     public double errorRate() {
         return requests == 0 ? 0 : (double) errors / requests;
     }

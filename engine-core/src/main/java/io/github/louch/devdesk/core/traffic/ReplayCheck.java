@@ -52,6 +52,9 @@ public final class ReplayCheck {
      */
     public record Result(boolean same, List<String> differences) {}
 
+    /**
+     * The differences between the recorded answer and this one; {@code same} is true when only ids and times changed.
+     */
     public static Result compare(Exchange recorded, int status, String body) {
         List<String> diffs = new ArrayList<>();
         if (recorded.status() != status) {

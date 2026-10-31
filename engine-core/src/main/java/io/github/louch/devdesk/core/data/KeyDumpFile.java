@@ -19,6 +19,7 @@ public final class KeyDumpFile {
 
     private KeyDumpFile() {}
 
+    /** The keys as the export file's JSON text. */
     public static String write(List<KeyValueBrowser.KeyDump> keys) {
         List<Map<String, Object>> list = new ArrayList<>();
         for (KeyValueBrowser.KeyDump k : keys) {

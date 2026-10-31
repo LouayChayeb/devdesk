@@ -24,10 +24,13 @@ public interface ObjectStore {
     /** The start of a file (at most {@code maxBytes}), to preview it. */
     Content read(DatabaseTarget target, String bucket, String key, int maxBytes);
 
+    /** Writes the file, replacing one with the same key. */
     void write(DatabaseTarget target, String bucket, String key, byte[] content, String contentType);
 
+    /** Deletes the file {@code key} from the bucket. */
     void delete(DatabaseTarget target, String bucket, String key);
 
+    /** Creates an empty bucket named {@code bucket}. */
     void createBucket(DatabaseTarget target, String bucket);
 
     /** A bucket and when it was made. */

@@ -15,6 +15,7 @@ public final class PlanAdvice {
 
     private PlanAdvice() {}
 
+    /** Hints for the slow parts of {@code plan} (full scans, filters that throw most rows away...); empty when none. */
     public static List<String> hints(QueryPlan plan) {
         List<String> out = new ArrayList<>();
         walk(plan.root(), out);

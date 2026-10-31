@@ -64,6 +64,7 @@ public final class ResponseRules {
         };
     }
 
+    /** Runs one check on the answer. The actual value is cut at 200 characters, and is "missing" when not found. */
     public static Result check(HttpSender.Outcome.Answered a, Check c) {
         Optional<String> value = read(a, c.part(), c.path());
         String actual =
@@ -85,6 +86,7 @@ public final class ResponseRules {
         return new Result(c, passed, actual);
     }
 
+    /** Runs every check on the answer, in order. */
     public static List<Result> checkAll(HttpSender.Outcome.Answered a, List<Check> checks) {
         return checks.stream().map(c -> check(a, c)).toList();
     }

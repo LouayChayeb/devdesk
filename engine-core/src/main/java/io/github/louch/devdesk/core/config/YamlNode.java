@@ -9,6 +9,7 @@ import java.util.Map;
  */
 public sealed interface YamlNode {
 
+    /** Where this value was written in the file. */
     Location location();
 
     /** {@code key: value} pairs, in file order. */
@@ -19,6 +20,7 @@ public sealed interface YamlNode {
 
     /** Text, number, boolean or empty. YAML scalars are kept as text; the parser decides what they must be. */
     record Scalar(String text, Location location) implements YamlNode {
+        /** True for an empty value: {@code key:} with nothing after it, {@code null} or {@code ~}. */
         public boolean isNull() {
             return text == null;
         }
@@ -27,6 +29,7 @@ public sealed interface YamlNode {
     /** One mapping entry: where the key was written, and its value. */
     record Entry(Location keyLocation, YamlNode value) {}
 
+    /** How {@code node} reads in an error message: "a list", "empty", or the text in quotes. */
     static String describe(YamlNode node) {
         return switch (node) {
             case Mapping m -> "a mapping (key: value)";

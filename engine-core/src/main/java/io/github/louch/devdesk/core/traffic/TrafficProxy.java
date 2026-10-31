@@ -30,8 +30,10 @@ public interface TrafficProxy {
 
     /** A started proxy. */
     interface Running {
+        /** The local port callers use instead of the service's port. */
         int port();
 
+        /** Stops the proxy at once; calls still running are cut off. */
         void stop();
     }
 }

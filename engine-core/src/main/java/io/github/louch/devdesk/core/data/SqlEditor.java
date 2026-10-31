@@ -58,6 +58,9 @@ public interface SqlEditor {
         RESET
     }
 
+    /**
+     * Runs one step of setting up or resetting the slowest-queries list. Postgres only; the others throw DataException.
+     */
     default void slowQueries(DatabaseTarget target, SlowQueriesStep step) {
         throw new DataException("only Postgres keeps a list of its slowest queries (pg_stat_statements)");
     }

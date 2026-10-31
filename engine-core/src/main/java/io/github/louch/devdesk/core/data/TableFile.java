@@ -29,6 +29,7 @@ public final class TableFile {
         /** One INSERT statement per row, for running in another database. */
         SQL;
 
+        /** The file extension for this format: "csv", "json" or "sql". */
         public String extension() {
             return name().toLowerCase(Locale.ROOT);
         }

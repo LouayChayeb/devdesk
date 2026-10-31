@@ -38,6 +38,9 @@ public record SlowQueries(Status status, List<Statement> statements, Optional<In
     public record Statement(
             String query, long calls, double totalMs, double meanMs, double maxMs, long rows, String shape) {}
 
+    /**
+     * A list that can't be read yet; {@code status} names the missing step (extension not installed, not loaded...).
+     */
     public static SlowQueries notReady(Status status) {
         return new SlowQueries(status, List.of(), Optional.empty());
     }

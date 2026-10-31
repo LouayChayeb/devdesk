@@ -10,6 +10,7 @@ import io.github.louch.devdesk.core.diagnosis.Finding;
  */
 public record Symptom(String service, String rule, String text) {
 
+    /** The symptom a finding describes: its service, its rule and its words, which the verdict searches for names. */
     public static Symptom of(Finding f) {
         return new Symptom(f.service(), f.ruleId(), f.title() + " " + f.explanation());
     }

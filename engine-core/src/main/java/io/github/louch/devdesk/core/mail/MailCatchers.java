@@ -25,6 +25,7 @@ public final class MailCatchers {
 
     private MailCatchers() {}
 
+    /** Every Mailpit the project runs, in file order; empty when it has none. */
     public static List<MailCatcher> find(ProjectSpec project) {
         List<MailCatcher> found = new ArrayList<>();
         for (ServiceSpec s : project.services().values()) {
@@ -33,6 +34,7 @@ public final class MailCatchers {
         return found;
     }
 
+    /** The Mailpit behind {@code service}, or empty when that service isn't one (or doesn't exist). */
     public static Optional<MailCatcher> find(ProjectSpec project, String service) {
         return Optional.ofNullable(project.services().get(service)).flatMap(MailCatchers::catcher);
     }

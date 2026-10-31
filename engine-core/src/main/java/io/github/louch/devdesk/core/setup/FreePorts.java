@@ -15,6 +15,7 @@ public final class FreePorts {
 
     private FreePorts() {}
 
+    /** The same draft with taken container ports moved to free ones; {@code free} says whether a host port is free. */
     public static SetupDraft apply(SetupDraft draft, IntPredicate free) {
         Set<Integer> used = new HashSet<>();
         draft.services().forEach(s -> used.addAll(s.hostPorts()));

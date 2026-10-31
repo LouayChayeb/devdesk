@@ -22,6 +22,7 @@ public final class FolderScan {
 
     /** The folder, read through the daemon (core does no file I/O). Paths are relative to the folder. */
     public interface Folder {
+        /** The folder's own name, which becomes the project's name. */
         String name();
 
         /** Direct subfolder names, without hidden ones. */
@@ -30,6 +31,7 @@ public final class FolderScan {
         /** The names of the files directly in the folder. */
         List<String> files();
 
+        /** The file's text, or empty when it's missing, outside the folder, too big or not text. */
         Optional<String> read(String relativePath);
     }
 

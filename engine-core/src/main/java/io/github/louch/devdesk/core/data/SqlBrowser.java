@@ -52,8 +52,10 @@ public interface SqlBrowser {
 
     /** Receives an export: the columns once, then each row. Cells are text; null is SQL NULL. */
     interface RowSink {
+        /** Called once, before the first row. */
         void columns(List<String> names, List<String> types);
 
+        /** Called once per row, with one text per column (null for SQL NULL). */
         void row(List<String> values);
     }
 

@@ -18,8 +18,10 @@ public interface MockServer {
 
     /** A started server. */
     interface Running {
+        /** The local port the mock server listens on. */
         int port();
 
+        /** Stops the mock server at once; requests still running are cut off. */
         void stop();
     }
 

@@ -29,6 +29,7 @@ public final class SetupYaml {
         return HEADER.lines().anyMatch(h -> h.equals(l)) || l.startsWith("# from ");
     }
 
+    /** The devdesk.yaml text for {@code draft}, ready to save. */
     public static String write(SetupDraft draft) {
         StringBuilder y = new StringBuilder();
         y.append(HEADER)

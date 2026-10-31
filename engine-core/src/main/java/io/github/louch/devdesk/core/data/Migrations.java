@@ -63,6 +63,7 @@ public final class Migrations {
      */
     public record Status(Tool tool, int applied, List<Migration> pending, List<String> failed, List<String> unknown) {
 
+        /** True when no migration is pending or failed. */
         public boolean upToDate() {
             return pending.isEmpty() && failed.isEmpty();
         }

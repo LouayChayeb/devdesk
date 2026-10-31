@@ -33,6 +33,7 @@ public final class DatabaseTargets {
 
     private DatabaseTargets() {}
 
+    /** Every database the project runs, in file order; empty when it has none. */
     public static List<DatabaseTarget> find(ProjectSpec project) {
         List<DatabaseTarget> found = new ArrayList<>();
         for (ServiceSpec s : project.services().values()) {
@@ -41,6 +42,7 @@ public final class DatabaseTargets {
         return found;
     }
 
+    /** The database behind {@code service}, or empty when that service isn't one DevDesk can open. */
     public static Optional<DatabaseTarget> find(ProjectSpec project, String service) {
         return Optional.ofNullable(project.services().get(service)).flatMap(s -> target(withEnvFiles(project, s)));
     }

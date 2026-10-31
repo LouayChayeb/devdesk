@@ -8,6 +8,7 @@ public final class EnvFile {
 
     private EnvFile() {}
 
+    /** The variables in the file's text, in file order; a later line wins. Lines that aren't variables are skipped. */
     public static Map<String, String> parse(String content) {
         Map<String, String> vars = new LinkedHashMap<>();
         // lines() splits at \n, \r\n and a lone \r, exactly like EnvFileEdit, so both see the same lines.

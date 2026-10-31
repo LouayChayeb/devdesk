@@ -6,6 +6,7 @@ import java.time.Duration;
 /** How DevDesk decides a service is really ready, not just "started". */
 public sealed interface HealthCheckSpec {
 
+    /** When and how often to probe, and how many failures count. */
     Timing timing();
 
     /**

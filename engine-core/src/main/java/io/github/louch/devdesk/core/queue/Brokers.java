@@ -24,6 +24,7 @@ public final class Brokers {
 
     private Brokers() {}
 
+    /** Every broker the project runs, in file order; empty when it has none. */
     public static List<Broker> find(ProjectSpec project) {
         List<Broker> out = new ArrayList<>();
         for (ServiceSpec s : project.services().values()) {
@@ -32,6 +33,7 @@ public final class Brokers {
         return out;
     }
 
+    /** The broker behind {@code service}, or empty when that service isn't one (or doesn't exist). */
     public static Optional<Broker> find(ProjectSpec project, String service) {
         return Optional.ofNullable(project.services().get(service)).flatMap(s -> broker(project, s));
     }

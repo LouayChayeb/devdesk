@@ -29,6 +29,7 @@ public record GitLink(String cloneUrl, String name, Optional<String> ref) {
         record Refused(String why) implements Parsed {}
     }
 
+    /** Reads a pasted link. Never throws: a link DevDesk can't clone comes back as a refusal that says why. */
     public static Parsed parse(String text) {
         String t = text.strip();
         Optional<String> ref = Optional.empty();

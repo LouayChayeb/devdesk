@@ -24,8 +24,10 @@ public final class FreshSetup {
 
     /** One step of the plan. {@code id} is stable, so the app can say which steps to run. */
     public sealed interface Step {
+        /** The step's stable id. */
         String id();
 
+        /** What the step does, as the app shows it. */
         String title();
 
         /**

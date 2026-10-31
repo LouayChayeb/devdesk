@@ -24,6 +24,7 @@ public final class Verdict {
 
     private Verdict() {}
 
+    /** Scores every change against what fails now and returns them best match first (equal scores keep their order). */
     public static List<Suspect> rank(ProjectSpec project, List<KnownGood.Change> changes, List<Symptom> symptoms) {
         List<Suspect> out = new ArrayList<>();
         for (KnownGood.Change c : changes) {

@@ -37,6 +37,10 @@ public record Snapshot(String id, String label, Instant created, List<Item> item
      */
     public record Item(Kind kind, String name, Optional<String> file, long bytes, Optional<String> problem) {
 
+        /**
+         * True when this item was written to a file; false when it was skipped or failed (then {@code problem} says
+         * why).
+         */
         public boolean saved() {
             return file.isPresent();
         }

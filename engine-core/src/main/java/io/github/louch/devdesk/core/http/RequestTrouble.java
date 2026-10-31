@@ -21,6 +21,7 @@ public final class RequestTrouble {
 
     private RequestTrouble() {}
 
+    /** One plain-words explanation of why the request got no answer, with what to do, using the project's services. */
     public static String explain(
             HttpSender.Outcome.Failed failed, String url, ProjectSpec project, Map<String, ServiceState> states) {
         Optional<URI> uri = parse(url);

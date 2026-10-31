@@ -98,6 +98,7 @@ public record SetupDraft(String name, List<String> envFiles, List<Service> servi
                     Map.of());
         }
 
+        /** True for a container service, false for a command that runs on this machine. */
         public boolean isContainer() {
             return "container".equals(kind);
         }
@@ -168,6 +169,7 @@ public record SetupDraft(String name, List<String> envFiles, List<Service> servi
                     x);
         }
 
+        /** The same service with its depends_on replaced by {@code next}. */
         public Service withDependsOn(Map<String, String> next) {
             return new Service(
                     name,
@@ -185,12 +187,6 @@ public record SetupDraft(String name, List<String> envFiles, List<Service> servi
                     notes,
                     extras);
         }
-
-        public Service withEnvironment(Map<String, String> next) {
-            return new Service(
-                    name, kind, command, directory, image, ports, volumes, next, dependsOn, health, restart, origin,
-                    notes, extras);
-        }
     }
 
     /**
@@ -204,14 +200,17 @@ public record SetupDraft(String name, List<String> envFiles, List<Service> servi
 
         public static final Health PROCESS = new Health("process", "", "");
 
+        /** A check that passes once something accepts connections on {@code port}. */
         public static Health tcp(int port) {
             return new Health("tcp", String.valueOf(port), "");
         }
 
+        /** A check that passes once {@code url} answers an HTTP GET with a status from 200 to 399. */
         public static Health http(String url) {
             return new Health("http", url, "");
         }
 
+        /** A check that passes once {@code command} exits with 0; failures during {@code startPeriod} don't count. */
         public static Health command(String command, String startPeriod) {
             return new Health("command", command, startPeriod);
         }

@@ -95,6 +95,7 @@ public final class DependencyGraph {
         return Set.copyOf(neededBy.get(service));
     }
 
+    /** The services {@code service} names in its own depends_on, without their dependencies in turn. */
     public Set<String> directDependencies(String service) {
         return Set.copyOf(needs.get(service));
     }

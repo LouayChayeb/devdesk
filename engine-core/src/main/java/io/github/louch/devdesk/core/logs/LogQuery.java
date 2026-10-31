@@ -48,6 +48,7 @@ public record LogQuery(String text, Set<String> services, boolean errorsOnly, In
     /** Whether one line matches. */
     @FunctionalInterface
     public interface Matcher {
+        /** True when {@code line} matches. */
         boolean test(LogLine line);
     }
 

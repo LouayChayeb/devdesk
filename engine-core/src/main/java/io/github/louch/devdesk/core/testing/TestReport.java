@@ -45,6 +45,9 @@ public record TestReport(int passed, int failed, int skipped, String unit, List<
             Pattern.compile("^(\\S+ > .+) FAILED$"), // Gradle
             Pattern.compile("^\\[ERROR\\]\\s{2,}(\\w[\\w.$]*\\.\\w+)[:(]")); // Maven's "Results:" list
 
+    /**
+     * The counts and failed names found in a test run's output, or empty when no known test tool's summary is in it.
+     */
     public static Optional<TestReport> parse(List<String> output) {
         int passed = 0;
         int failed = 0;

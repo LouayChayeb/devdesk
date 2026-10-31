@@ -181,6 +181,7 @@ public final class ProjectSupervisor implements AutoCloseable {
             Duration restartBaseDelay,
             Duration sampleInterval) {
 
+        /** The normal settings: the first restart waits 1 second, and resources are sampled every 2 seconds. */
         public static Settings defaults(Map<String, String> env, Clock clock, RandomGenerator random) {
             return new Settings(env, clock, random, Duration.ofSeconds(1), Duration.ofSeconds(2));
         }

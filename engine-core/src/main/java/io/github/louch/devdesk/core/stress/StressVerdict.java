@@ -24,6 +24,7 @@ public record StressVerdict(
     static final double SLOWER = 4.0;
     private static final Set<String> GAVE_UP = Set.of("unhealthy", "crashed", "failed", "crash-loop", "stopped");
 
+    /** Reads the run so far. With no seconds yet, the verdict says nothing was sent. */
     public static StressVerdict of(List<LoadSecond> seconds, List<ServicePoint> points) {
         if (seconds.isEmpty()) {
             return new StressVerdict(Optional.empty(), Optional.empty(), Optional.empty(), "Nothing was sent yet.");

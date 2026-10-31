@@ -16,6 +16,7 @@ public interface MailBox {
      */
     Page list(MailCatcher catcher, String search, int limit);
 
+    /** One whole mail, by the id {@link #list} gave. */
     Mail read(MailCatcher catcher, String id);
 
     /** One file attached to a mail, as bytes. */

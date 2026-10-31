@@ -19,6 +19,7 @@ public final class ConfigException extends Exception {
         return new ConfigException(List.of(new ConfigProblem(location, path, message)));
     }
 
+    /** Every problem found, never empty. */
     public List<ConfigProblem> problems() {
         return problems;
     }

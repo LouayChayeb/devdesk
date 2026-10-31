@@ -6,6 +6,7 @@ public enum SqlDialect {
     MYSQL,
     SQLITE;
 
+    /** The dialect of a SQL database. Throws IllegalArgumentException for a kind that has no SQL (Redis, Mongo...). */
     public static SqlDialect of(DatabaseTarget.Kind kind) {
         return switch (kind) {
             case POSTGRES -> POSTGRES;

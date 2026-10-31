@@ -36,6 +36,7 @@ public final class QueryLog {
     /** A row the request touched, to open in the Data page. */
     public record RowLink(String schema, String table, String column, String value, String action) {}
 
+    /** The queries in these log lines, in order, with their duration and parameters. */
     public static List<Query> parse(List<Line> lines) {
         List<Query> out = new ArrayList<>();
         StringBuilder sql = null;

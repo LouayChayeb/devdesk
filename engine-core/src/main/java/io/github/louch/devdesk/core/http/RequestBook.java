@@ -15,8 +15,10 @@ import java.util.Set;
  */
 public interface RequestBook {
 
+    /** The saved requests, variables and history; an empty book when nothing was saved. */
     Book load();
 
+    /** Saves the whole book, replacing what was there. */
     void store(Book book);
 
     /**
@@ -69,6 +71,7 @@ public interface RequestBook {
             history = List.copyOf(history);
         }
 
+        /** A book with no saved requests, no variables and no history. */
         public static Book empty() {
             return new Book(List.of(), Map.of(), List.of());
         }
@@ -94,15 +97,18 @@ public interface RequestBook {
             return b;
         }
 
+        /** The same book without the saved request {@code id} (unchanged when there is none). */
         public Book without(String id) {
             return new Book(saved.stream().filter(r -> !r.id().equals(id)).toList(), variables, history);
         }
 
+        /** The saved request with this id, or empty. */
         public Optional<SavedRequest> find(String id) {
             int at = indexOf(id);
             return at >= 0 ? Optional.of(saved.get(at)) : Optional.empty();
         }
 
+        /** The same book with its variables replaced by {@code next}. */
         public Book withVariables(Map<String, String> next) {
             return new Book(saved, new LinkedHashMap<>(next), history);
         }

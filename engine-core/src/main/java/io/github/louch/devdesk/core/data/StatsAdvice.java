@@ -20,6 +20,7 @@ public final class StatsAdvice {
     /** @param table the table it's about ("public.orders"), or empty for the whole database */
     public record Hint(String table, String text) {}
 
+    /** Hints worth reading for these statistics, one per table and problem; empty when nothing stands out. */
     public static List<Hint> of(DatabaseStats stats) {
         List<Hint> out = new ArrayList<>();
         for (DatabaseStats.TableStats t : stats.tables()) {

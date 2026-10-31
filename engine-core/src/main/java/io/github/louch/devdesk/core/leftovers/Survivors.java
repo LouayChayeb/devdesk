@@ -21,6 +21,7 @@ public final class Survivors {
         this.finders = List.copyOf(finders);
     }
 
+    /** What a dead DevDesk left running for this project. Only looks; stops nothing. */
     public List<Leftover> find(ProjectSpec project) {
         List<Leftover> all = new ArrayList<>();
         finders.forEach(f -> all.addAll(f.find(project)));

@@ -74,10 +74,12 @@ public final class RecentRequests {
         return Optional.empty();
     }
 
+    /** The request with this id, or empty once it has dropped out of the recent list. */
     public synchronized Optional<Sent> find(long id) {
         return sent.stream().filter(s -> s.id() == id).findFirst();
     }
 
+    /** True when a log line looks like an error or the start of a stack trace. */
     public static boolean looksLikeError(String line) {
         return ERROR.matcher(line).find();
     }
