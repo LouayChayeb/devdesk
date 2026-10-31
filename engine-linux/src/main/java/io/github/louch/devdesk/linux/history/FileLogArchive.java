@@ -48,6 +48,9 @@ public final class FileLogArchive implements LogArchive {
         deleteOldDays();
     }
 
+    /**
+     * The archive for one project, in {@code $XDG_STATE_HOME/devdesk/logs/<project key>/}. Old days are deleted now.
+     */
     public static FileLogArchive forProject(Map<String, String> env, ProjectSpec project, Clock clock) {
         String state = env.getOrDefault("XDG_STATE_HOME", "");
         Path base = state.isBlank() ? Path.of(env.getOrDefault("HOME", "/tmp"), ".local", "state") : Path.of(state);

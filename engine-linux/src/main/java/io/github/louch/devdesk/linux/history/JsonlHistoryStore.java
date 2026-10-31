@@ -49,6 +49,7 @@ public final class JsonlHistoryStore implements HistoryStore {
         return new JsonlHistoryStore(base.resolve("devdesk").resolve("history").resolve(project.key()));
     }
 
+    /** The folder holding this project's day files. */
     public Path directory() {
         return dir;
     }

@@ -32,6 +32,7 @@ public final class LocalRemoval implements RemovalPort {
 
     /** Deletes files another user owns inside a folder; empty when it did, otherwise why not. */
     public interface RootFiles {
+        /** Deletes the other user's files inside {@code folder}; empty when it worked, otherwise why not. */
         Optional<String> deleteInside(Path folder);
     }
 

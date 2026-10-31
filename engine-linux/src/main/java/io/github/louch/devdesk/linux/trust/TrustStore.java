@@ -49,6 +49,7 @@ public final class TrustStore {
         }
     }
 
+    /** True when this file was trusted with exactly this {@link #fingerprint}; false for a new or changed file. */
     public boolean isTrusted(Path projectFile, String fingerprint) {
         return fingerprint.equals(read().get(key(projectFile)));
     }

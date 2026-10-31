@@ -94,6 +94,10 @@ public final class LinuxProcessRuntime implements ProcessRuntime {
         return new LinuxProcessRuntime(systemdUserSessionRunning(), clock, random, Optional.of(records));
     }
 
+    /**
+     * True when commands run in systemd scopes (a cgroup each); false in process-group mode, when no systemd user
+     * session runs.
+     */
     public boolean usesSystemdScope() {
         return useSystemdScope;
     }
