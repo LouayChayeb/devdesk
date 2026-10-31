@@ -66,6 +66,10 @@ public final class Main {
 
     private Main() {}
 
+    /**
+     * Starts the engine and its API, prints the connection line, and runs until its stdin closes (the app ended) or it
+     * gets a signal.
+     */
     public static void main(String[] args) throws Exception {
         var env = System.getenv();
         var clock = Clock.systemUTC();
