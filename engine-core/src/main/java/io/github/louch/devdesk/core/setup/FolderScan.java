@@ -237,10 +237,19 @@ public final class FolderScan {
         if (!AppDetector.isWorkspaceRoot(folder::read)) {
             dirs.add("");
         }
-        folder.subfolders().stream()
-                .filter(d -> !SKIPPED_FOLDERS.contains(d))
-                .sorted()
-                .forEach(dirs::add);
+        // A compose service built from the project folder of a workspace builds every member into its image
+        // (excalidraw: the root Dockerfile builds excalidraw-app). A command card for a member would be that same app
+        // a second time, on another port.
+        boolean rootImageHoldsWorkspace = composeFile.isPresent()
+                && AppDetector.isWorkspaceRoot(folder::read)
+                && services.stream()
+                        .anyMatch(s -> s.isContainer() && ".".equals(s.extras().get("build")));
+        if (!rootImageHoldsWorkspace) {
+            folder.subfolders().stream()
+                    .filter(d -> !SKIPPED_FOLDERS.contains(d))
+                    .sorted()
+                    .forEach(dirs::add);
+        }
         for (String dir : dirs) {
             if (covered.contains(dir)) {
                 continue;

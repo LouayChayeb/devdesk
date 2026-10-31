@@ -341,6 +341,50 @@ class FolderScanTest {
     }
 
     @Test
+    void anImageBuiltFromTheWorkspaceRootIsTheAppNoSecondCardForItsMembers() {
+        // Like excalidraw: compose builds the root Dockerfile, which builds excalidraw-app into the image. The wizard
+        // also made an excalidraw-app command card: the same app twice, which then failed its own install.
+        var folder = new FakeFolder(
+                "excalidraw",
+                Map.of(
+                        "docker-compose.yml",
+                                "services:\n  excalidraw:\n    build: { context: . }\n    ports: [\"3000:80\"]\n",
+                        "Dockerfile", "FROM node:24\nRUN yarn build:app:docker\n",
+                        "package.json", "{\"packageManager\": \"yarn@1.22.22\", \"workspaces\": [\"excalidraw-app\"]}",
+                        "excalidraw-app/package.json", "{\"scripts\": {\"start\": \"yarn && vite\"}}"));
+
+        var services = FolderScan.scan(folder, "/home/me/excalidraw", List.of())
+                .draft()
+                .services();
+
+        assertThat(services).extracting(SetupDraft.Service::name).containsExactly("excalidraw");
+    }
+
+    @Test
+    void aWorkspaceMemberStartsItsDevServerWithTheRootsPinnedManagerNotAServeOfABuild() {
+        // excalidraw-app without the compose file: "serve" only serves build/, empty on a fresh clone, yet its port
+        // answered, so the card showed healthy while serving nothing. "start" is the dev server.
+        var folder = new FakeFolder(
+                "excalidraw",
+                Map.of(
+                        "package.json",
+                        "{\"packageManager\": \"yarn@1.22.22\", \"workspaces\": [\"excalidraw-app\"]}",
+                        "excalidraw-app/package.json",
+                        "{\"scripts\": {\"serve\": \"npx http-server build -a localhost -p 5001 -o\","
+                                + " \"start\": \"yarn && vite\"}, \"dependencies\": {\"react\": \"19\"}}"));
+
+        var app = FolderScan.scan(folder, "/home/me/excalidraw", List.of())
+                .draft()
+                .services()
+                .getFirst();
+
+        assertThat(app.command()).isEqualTo("corepack yarn start");
+        assertThat(app.ports()).containsExactly("5173");
+        assertThat(app.notes())
+                .anySatisfy(n -> assertThat(n).contains("run \"corepack yarn install\" in the project folder"));
+    }
+
+    @Test
     void aPinnedPackageManagerRunsThroughCorepack() {
         // Like outline (yarn@4) and hoppscotch (pnpm@10): a plain yarn refuses them ("Corepack must currently be
         // enabled"), and pnpm may not be installed at all. Corepack comes with Node and runs the pinned version.

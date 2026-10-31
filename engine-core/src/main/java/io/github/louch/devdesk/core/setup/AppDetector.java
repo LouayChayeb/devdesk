@@ -40,7 +40,7 @@ final class AppDetector {
     static Optional<ComposeImport.DetectedApp> detect(
             Function<String, Optional<String>> read, String dir, List<String> files) {
         Function<String, Optional<String>> here = file -> read.apply(dir.isEmpty() ? file : dir + "/" + file);
-        return node(here, dir)
+        return node(here, read, dir)
                 .or(() -> java(here, dir))
                 .or(() -> django(here, dir))
                 .or(() -> python(here, dir))
@@ -85,26 +85,41 @@ final class AppDetector {
 
     /** Whether package.json says it's a monorepo root: the real apps are in its workspaces, not here. */
     static boolean isWorkspaceRoot(Function<String, Optional<String>> read) {
-        return read.apply("package.json")
-                .flatMap(AppDetector::json)
-                .map(j -> j.has("workspaces"))
-                .orElse(false);
+        return read.apply("pnpm-workspace.yaml").isPresent()
+                || read.apply("package.json")
+                        .flatMap(AppDetector::json)
+                        .map(j -> j.has("workspaces"))
+                        .orElse(false);
     }
 
-    private static Optional<ComposeImport.DetectedApp> node(Function<String, Optional<String>> read, String dir) {
+    /**
+     * A script that serves files already built ({@code npx http-server build}, {@code vite preview}): on a fresh
+     * clone there's nothing built, yet its port answers, so the card would look healthy while serving nothing.
+     */
+    private static boolean servesABuild(String body) {
+        return body.matches(".*\\b(http-server|vite preview|serve\\s+(-s\\s+)?(build|dist|out))\\b.*");
+    }
+
+    /** @param project reads from the project folder: a workspace member's manager is pinned in the root package.json */
+    private static Optional<ComposeImport.DetectedApp> node(
+            Function<String, Optional<String>> read, Function<String, Optional<String>> project, String dir) {
         Optional<JsonNode> pkg = read.apply("package.json").flatMap(AppDetector::json);
         if (pkg.isEmpty()) {
             return Optional.empty();
         }
         JsonNode scripts = pkg.get().path("scripts");
-        Optional<String> script = NODE_SCRIPTS.stream().filter(scripts::has).findFirst();
+        Optional<String> script = NODE_SCRIPTS.stream()
+                .filter(scripts::has)
+                .filter(name -> !servesABuild(scripts.path(name).asString("")))
+                .findFirst();
         if (script.isEmpty()) {
             return nodeMain(read, dir, pkg.get());
         }
         String body = scripts.path(script.get()).asString("");
         // Each package manager keeps its own lock file; running another one would install different versions.
         // A version pinned in package.json wins, through corepack (see Install.pinnedManager).
-        Optional<String> pinned = Install.pinnedManager(read);
+        boolean member = !dir.isEmpty() && isWorkspaceRoot(project);
+        Optional<String> pinned = Install.pinnedManager(read).or(() -> Install.pinnedManager(project));
         String runner = pinned.isPresent()
                 ? pinned.get() + (pinned.get().endsWith("pnpm") ? " run " : " ")
                 : read.apply("pnpm-lock.yaml").isPresent()
@@ -131,9 +146,13 @@ final class AppDetector {
                 .or(() -> read.apply("node_modules/.yarn-integrity"))
                 .isPresent();
         List<String> notes = hasPackages && !installed
-                ? List.of("Its packages aren't installed yet: run \"" + Install.nodeInstall(read) + "\" in ./"
-                        + dir
-                        + " once, or the start command will fail.")
+                ? List.of(
+                        member
+                                ? "Its packages aren't installed yet: run \"" + Install.nodeInstall(project)
+                                        + "\" in the project folder once (it's part of a workspace), or the start command"
+                                        + " will fail."
+                                : "Its packages aren't installed yet: run \"" + Install.nodeInstall(read) + "\" in ./"
+                                        + dir + " once, or the start command will fail.")
                 : List.of();
         return Optional.of(new ComposeImport.DetectedApp(
                 runner + script.get(),

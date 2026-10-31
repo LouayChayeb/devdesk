@@ -194,15 +194,26 @@ public final class FreshSetup {
             // "api's packages", or "the packages of migrate and api" when several services share the folder.
             String who = services.size() == 1 ? services.getFirst() + "'s" : "the";
             String whose = services.size() == 1 ? "" : " of " + String.join(" and ", services);
-            if (here.apply("package.json").isPresent()
-                    && Install.MARKERS.stream()
-                            .noneMatch(m -> exists.test((dir.isEmpty() ? "" : dir + "/") + "node_modules/" + m))) {
-                String install = Install.nodeInstall(here);
-                steps.add(new Step.Run(
-                        "install:" + dir,
-                        "Install " + who + " packages" + whose + " (" + install + " in " + where + ")",
-                        dir,
-                        install));
+            // A workspace member (excalidraw-app in excalidraw) installs from the workspace root: one install there
+            // links every member, with the root's lock file and pinned manager. Installing in the member alone fails.
+            boolean member = !dir.isEmpty() && AppDetector.isWorkspaceRoot(read);
+            String installDir = member ? "" : dir;
+            Function<String, Optional<String>> installFrom = member ? read : here;
+            if (here.apply("package.json").isPresent()) {
+                if (Install.MARKERS.stream()
+                                .noneMatch(m -> exists.test(
+                                        (installDir.isEmpty() ? "" : installDir + "/") + "node_modules/" + m))
+                        && steps.stream().noneMatch(st -> st.id().equals("install:" + installDir))) {
+                    String install = Install.nodeInstall(installFrom);
+                    steps.add(new Step.Run(
+                            "install:" + installDir,
+                            member
+                                    ? "Install the workspace's packages, " + who.replace("'s", "") + "'s included ("
+                                            + install + " in the project folder)"
+                                    : "Install " + who + " packages" + whose + " (" + install + " in " + where + ")",
+                            installDir,
+                            install));
+                }
             } else if (here.apply("pom.xml").isPresent()) {
                 String mvn = here.apply("mvnw").isPresent() ? "./mvnw" : "mvn";
                 steps.add(new Step.Run(

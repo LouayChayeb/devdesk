@@ -67,6 +67,34 @@ class FreshSetupTest {
     }
 
     @Test
+    void workspaceMembersInstallOnceFromTheRootWithItsPinnedManager() throws Exception {
+        // Found on excalidraw: "npm install" inside excalidraw-app failed (exit 127); its yarn workspace installs
+        // from the root, with the yarn version the root package.json pins.
+        var draft = ExistingSetup.read("""
+                version: 1
+                services:
+                  app: { command: corepack yarn start, directory: excalidraw-app }
+                  docs: { command: corepack yarn start, directory: dev-docs }
+                """, "excalidraw");
+        Map<String, String> files = Map.of(
+                "package.json",
+                        "{\"packageManager\": \"yarn@1.22.22\", \"workspaces\": [\"excalidraw-app\", \"dev-docs\"]}",
+                "yarn.lock", "",
+                "excalidraw-app/package.json", "{}",
+                "dev-docs/package.json", "{}");
+
+        var plan = FreshSetup.of(draft, f -> Optional.ofNullable(files.get(f)), files::containsKey);
+
+        assertThat(plan.steps())
+                .singleElement()
+                .isEqualTo(new FreshSetup.Step.Run(
+                        "install:",
+                        "Install the workspace's packages, app's included (corepack yarn install in the project folder)",
+                        "",
+                        "corepack yarn install"));
+    }
+
+    @Test
     void withoutAnExampleTheVariablesDevdeskYamlUsesAreAsked() throws Exception {
         var env = (FreshSetup.Step.CreateEnv) plan(Map.of()).steps().getFirst();
 
