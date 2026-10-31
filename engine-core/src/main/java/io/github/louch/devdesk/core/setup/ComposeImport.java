@@ -16,8 +16,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Turns a docker-compose.yml into wizard cards. Images become containers; services compose builds from a Dockerfile
- * become commands run on this machine (how people develop day to day), found by {@code detectApp}. What can't be
+ * Turns a docker-compose.yml into wizard cards. Images become containers. Services compose builds from a Dockerfile
+ * become containers too, built like {@code docker compose build}, so nothing has to be installed on this machine; the
+ * command to run one natively instead (found by {@code detectApp}) stays on the card, one switch away. What can't be
  * mapped is said in a note, never dropped silently.
  */
 public final class ComposeImport {
