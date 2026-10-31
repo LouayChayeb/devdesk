@@ -26,12 +26,13 @@ import picocli.CommandLine.Command;
 @Command(name = "devdesk", mixinStandardHelpOptions = true, description = "Run local multi-service environments.")
 public final class Main {
 
+    /** Runs one devdesk command and exits with its exit code (0 = success). */
     public static void main(String[] args) {
         System.exit(commandLine().execute(args));
     }
 
     static CommandLine commandLine() {
-        // In M1 the engine runs inside the CLI. From M3 the CLI will talk to the daemon instead.
+        // The engine runs inside the CLI process: the CLI never talks to the daemon (that was M3, skipped).
         var clock = Clock.systemUTC();
         var random = new SecureRandom();
         var env = System.getenv();
