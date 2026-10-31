@@ -481,13 +481,18 @@ public final class ProjectSupervisor implements AutoCloseable {
         for (Service s : services.values()) {
             // Blocked by a dependency that has since recovered (Twenty's server failed its first health checks while
             // it set up its database, then became healthy): it waits again, and starts once everything is ready.
-            if (s.state instanceof ServiceState.Blocked b
-                    && !keptStopped.contains(s.spec.name())
-                    && dependencyVerdict(s)
-                            .filter(v -> v instanceof ServiceEvent.DependenciesReady)
-                            .isPresent()) {
-                apply(s, new ServiceEvent.StartRequested(), b.cause() + " recovered: starting it now");
-                changed = true;
+            if (s.state instanceof ServiceState.Blocked b && !keptStopped.contains(s.spec.name())) {
+                Optional<ServiceEvent> verdict = dependencyVerdict(s);
+                if (verdict.filter(v -> v instanceof ServiceEvent.DependenciesReady)
+                        .isPresent()) {
+                    apply(s, new ServiceEvent.StartRequested(), b.cause() + " recovered: starting it now");
+                    changed = true;
+                } else if (verdict.orElse(null) instanceof ServiceEvent.DependencyFailed f
+                        && !f.cause().equals(b.cause())) {
+                    // directus: blocked by postgres (slow first start), postgres recovered, but maria still fails.
+                    apply(s, f, f.reason());
+                    changed = true;
+                }
             }
         }
         for (Service s : services.values()) {

@@ -82,6 +82,9 @@ class ServiceStateMachineTest {
     void failedDependencyBlocksAndLaunchFailureIsKept() {
         assertThat(next(new WaitingDeps(), new DependencyFailed("db", "db crashed (code 1)")))
                 .isEqualTo(new Blocked("db crashed (code 1)", "db"));
+        // still blocked, now by the dependency that fails now (db recovered, cache didn't)
+        assertThat(next(new Blocked("db is unhealthy", "db"), new DependencyFailed("cache", "cache is unhealthy")))
+                .isEqualTo(new Blocked("cache is unhealthy", "cache"));
         assertThat(next(new Starting(0), new LaunchFailed("no such directory")))
                 .isEqualTo(new FailedToStart("no such directory"));
     }

@@ -455,6 +455,43 @@ class ProjectSupervisorTest {
     }
 
     @Test
+    void aBlockedServiceNamesTheDependencyThatStillFailsNotOneThatRecovered() throws Exception {
+        // directus: api was blocked by postgres (slow first start); postgres became healthy, maria never did, and
+        // the explanation still said "postgres is the one that failed".
+        unhealthy.add("pg");
+        unhealthy.add("maria");
+        var s = supervisor("""
+                version: 1
+                services:
+                  pg:
+                    command: pg
+                    health: { type: command, command: pg, %1$s }
+                  maria:
+                    command: maria
+                    health: { type: command, command: maria, %1$s }
+                  api:
+                    command: api
+                    depends_on: { pg: { condition: healthy }, maria: { condition: healthy } }
+                """.formatted(FAST));
+        s.up();
+        awaitState(s, "api", ServiceState.Blocked.class);
+
+        unhealthy.remove("pg");
+
+        awaitState(s, "pg", ServiceState.Healthy.class);
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!(s.snapshot().get().get("api") instanceof ServiceState.Blocked b
+                        && b.cause().equals("maria"))
+                && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(s.snapshot().get().get("api"))
+                .isInstanceOfSatisfying(
+                        ServiceState.Blocked.class, b -> assertThat(b.cause()).isEqualTo("maria"));
+        s.down().get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
     void aServiceBlockedByAFailedDependencyStartsWhenTheDependencyRecovers() throws Exception {
         // Twenty: the server failed its first health checks while it set up its database, the worker was blocked,
         // and stayed blocked after the server became healthy.

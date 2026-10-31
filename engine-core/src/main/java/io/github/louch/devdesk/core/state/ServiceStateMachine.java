@@ -47,8 +47,14 @@ public final class ServiceStateMachine {
                     default -> from; // already starting or running: starting again is a no-op
                 };
             case DependenciesReady e -> require(from, event, from instanceof WaitingDeps, new Starting(0));
+            // Also from Blocked: when the dependency it was blocked by recovers but another one fails, the reason
+            // must name the one failing now, or the explanation points at a healthy service.
             case DependencyFailed e ->
-                require(from, event, from instanceof WaitingDeps, new Blocked(e.reason(), e.cause()));
+                require(
+                        from,
+                        event,
+                        from instanceof WaitingDeps || from instanceof Blocked,
+                        new Blocked(e.reason(), e.cause()));
             case Launched e ->
                 switch (from) {
                     case Starting s -> new Running(e.pid(), s.restarts());
