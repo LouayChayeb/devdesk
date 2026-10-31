@@ -47,7 +47,7 @@ class EngineProcessTest {
 
         try {
             // The setup wizard on a compose project: scanned and checked, nothing written or started.
-            String compose = Path.of("..", "examples", "compose-shop")
+            String compose = Path.of("src", "test", "resources", "projects", "compose-shop")
                     .toAbsolutePath()
                     .normalize()
                     .toString();
@@ -91,7 +91,7 @@ class EngineProcessTest {
                             .statusCode())
                     .isEqualTo(404);
 
-            String project = Path.of("..", "examples", "three-tier")
+            String project = Path.of("src", "test", "resources", "projects", "three-tier")
                     .toAbsolutePath()
                     .normalize()
                     .toString();
@@ -181,7 +181,7 @@ class EngineProcessTest {
 
             // The project switcher: opening another project is refused while this one runs, unless the user chose
             // "stop this one and open that one". Then everything is stopped before the other project opens.
-            String other = Path.of("..", "examples", "mixed")
+            String other = Path.of("src", "test", "resources", "projects", "mixed")
                     .toAbsolutePath()
                     .normalize()
                     .toString();

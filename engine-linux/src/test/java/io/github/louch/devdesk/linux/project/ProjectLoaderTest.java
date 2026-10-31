@@ -28,7 +28,7 @@ class ProjectLoaderTest {
 
     @Test
     void trustingOneFileOfAFolderDoesNotUntrustAnother() throws Exception {
-        // Found with examples/broken: several project files in one folder, each trusted with -f.
+        // Found with a folder of several broken-on-purpose project files, each trusted with -f.
         Path a = Files.writeString(dir.resolve("a.yaml"), YAML.formatted("a"));
         Path b = Files.writeString(dir.resolve("b.yaml"), YAML.formatted("b"));
         var store = new TrustStore(dir.resolve("trust.txt"));

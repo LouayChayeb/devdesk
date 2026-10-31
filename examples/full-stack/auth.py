@@ -1,11 +1,14 @@
 # Login service. Healthy while Postgres answers.
 #   POST /login {"user": "ada", "password": "dev"} → {"access_token": "..."} and a "session" cookie
 #   GET  /me    with "Authorization: Bearer <token>" or the session cookie → who you are, else 401
-import json, os, secrets
+import json, os, secrets, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pg import pg_ping
 
 PORT, PG = int(os.environ["PORT"]), int(os.environ["PG_PORT"])
+# Break it on purpose: JWT_SECRET= devdesk up  (an empty secret, like a .env someone forgot to fill in)
+if not os.environ.get("JWT_SECRET"):
+    sys.exit("auth: JWT_SECRET is empty, refusing to start: login tokens can't be signed without it")
 tokens = {}  # token → user name
 
 class Handler(BaseHTTPRequestHandler):

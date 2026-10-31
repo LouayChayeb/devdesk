@@ -1,6 +1,0 @@
-version: 1
-name: broken-port
-services:
-  api:
-    command: python3 -m http.server 3003 --bind 127.0.0.1
-    ports: [3003]

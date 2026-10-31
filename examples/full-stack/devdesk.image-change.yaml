@@ -1,0 +1,17 @@
+# "It worked yesterday": an image that changes under the same tag, and DevDesk proving it broke things. Needs Docker.
+# A second, small project in this folder (its own name, so its history is separate from full-stack's).
+# Run every command from this folder; the steps are in README.md ("An image update that breaks it").
+version: 1
+name: full-stack-image-change
+
+services:
+  greeter:
+    container:
+      image: devdesk-example/greeter:latest
+      ports: ["58080:8080"]
+    health: { type: http, url: http://127.0.0.1:58080/, start_period: 10s }
+
+  client:
+    command: sh -c 'while true; do sleep 5; done'
+    depends_on:
+      greeter: { condition: healthy }

@@ -8,6 +8,7 @@
 #
 # Try:   devdesk trust   then   devdesk up      (or open this folder in the app)
 # Then:  open http://127.0.0.1:18000 (the gateway) and http://127.0.0.1:58026 (mailpit's inbox: the worker sends mail)
+# Break it on purpose (each one is a single command): see README.md in this folder.
 version: 1
 name: full-stack
 
@@ -61,7 +62,9 @@ services:
       migrate: { condition: completed_successfully }
       redis: { condition: healthy }
     ports: [18080]
-    environment: { PORT: "18080", PG_PORT: "55440", REDIS_PORT: "56380", REDIS_POOL: "4" }
+    # ${API_REDIS_PORT:-56380}: the port from your shell when set, else 56380. API_REDIS_PORT=56399 devdesk up
+    # points api at a port where nothing listens: it crashes on start, again and again (see README.md).
+    environment: { PORT: "18080", PG_PORT: "55440", REDIS_PORT: "${API_REDIS_PORT:-56380}", REDIS_POOL: "4" }
     health: { type: http, url: http://127.0.0.1:18080/health }
     restart: on-failure
 
@@ -70,7 +73,8 @@ services:
     depends_on:
       migrate: { condition: completed_successfully }
     ports: [18081]
-    environment: { PORT: "18081", PG_PORT: "55440", JWT_SECRET: "dev-only-not-a-real-secret" }
+    # No colon in ${JWT_SECRET-...}: an empty JWT_SECRET in your shell stays empty (JWT_SECRET= devdesk up).
+    environment: { PORT: "18081", PG_PORT: "55440", JWT_SECRET: "${JWT_SECRET-dev-only-not-a-real-secret}" }
     health: { type: http, url: http://127.0.0.1:18081/health }
     restart: on-failure
 

@@ -1,5 +1,4 @@
-// cli: the picocli client. Until M3 it runs the engine in-process, so it wires core
-// and the Linux adapter itself. From M3 on it only talks to the daemon over HTTP.
+// cli: the picocli client. It runs the engine in-process, so it wires core and the Linux and Docker adapters itself.
 plugins {
     id("devdesk.java-conventions")
     application // adds ./gradlew :cli:run and packages a start script
@@ -7,7 +6,8 @@ plugins {
 }
 
 // The AOT training run: a project check, which loads what most commands use (the parser, the diagnosis rules).
-extra["aotTraining"] = listOf("why", "-f", rootProject.file("examples/three-tier/devdesk.yaml").path)
+extra["aotTraining"] =
+    listOf("why", "-f", rootProject.file("daemon/src/test/resources/projects/three-tier/devdesk.yaml").path)
 
 dependencies {
     implementation(project(":engine-core"))

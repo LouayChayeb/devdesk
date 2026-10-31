@@ -1,6 +1,0 @@
-version: 1
-name: broken-killed
-services:
-  api:
-    # Kills itself with SIGKILL after a second, just like the kernel's out-of-memory killer would.
-    command: python3 -c "import os, time; print('loading a huge file into memory...', flush=True); time.sleep(1); os.kill(os.getpid(), 9)"

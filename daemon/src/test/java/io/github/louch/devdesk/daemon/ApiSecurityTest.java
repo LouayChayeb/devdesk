@@ -154,7 +154,7 @@ class ApiSecurityTest {
         long seq = ((Number) first.get("seq")).longValue();
 
         // Opening a project makes events; each must come after the snapshot, numbered one by one.
-        String project = Path.of("..", "examples", "three-tier")
+        String project = Path.of("src", "test", "resources", "projects", "three-tier")
                 .toAbsolutePath()
                 .normalize()
                 .toString();

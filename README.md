@@ -31,34 +31,32 @@ Port 3003 is already taken by a server someone started in another terminal. DevD
 
 ![A service fails to start because its port is taken; clicking Why? shows who holds the port and how to free it](.github/assets/why-port.gif)
 
-The same in a terminal (real output, `examples/broken/wrong-port.yaml`):
+The same kind of problem in a terminal (real output from the example project, `examples/full-stack`, with port 18000
+taken by hand first):
 
 ```
-$ devdesk up -f wrong-port.yaml
-Starting broken-wrong-port (1 service)
-▶ api running, PID 115617 (0.1s)
-api | Serving HTTP on 127.0.0.1 port 3005 (http://127.0.0.1:3005/) ...
-! api unhealthy: GET http://127.0.0.1:3006/: connection refused (nothing listening yet?) (2 checks in a row)
-  ✗ api never became healthy
-      why:  api started, but its health check never passed: GET http://127.0.0.1:3006/: connection refused
-            (nothing listening yet?) (2 checks in a row). It listens on [3005], but the check waits on port 3006.
-      seen: check failed: GET http://127.0.0.1:3006/: connection refused (nothing listening yet?)  (6 times)
-      seen: api (PIDs [115617, 115623]) listens on ports [3005]
-      fix:  make the health check use port 3005, or make api listen on 3006
-```
-
-`devdesk why` checks a project before anything starts (`examples/broken/command-not-found.yaml`):
-
-```
-$ devdesk why -f command-not-found.yaml
-Checking broken-command (nothing is started)...
-api:
-  ✗ Program `pyhton3` is not installed or not on PATH
-      why:  api starts with `pyhton3`, but DevDesk can't find it in any PATH folder. In a terminal it may work
-            because your shell setup (nvm, sdkman, ~/.local/bin) adds folders.
-      fix:  install it, or check the spelling in devdesk.yaml
-      fix:  if it works in your terminal, run `which pyhton3` there and use that full path
+$ devdesk why
+Checking full-stack (nothing is started)...
+gateway:
+  ✗ Port 18000 is already in use
+      why:  gateway needs port 18000, but it's taken by PID 144466 (python3 -m http.server 18000 --bind 127.0.0.1), which is not part of this project.
+      seen: /proc/net/tcp: 127.0.0.1:18000 LISTEN, uid 1000 → PID 144466
+      fix:  Free it with: kill 144466
+      fix:  or change the port gateway uses in devdesk.yaml
 1 problem(s) would stop the project from starting.
+```
+
+And a secret someone forgot to fill in (`JWT_SECRET= devdesk up`, shortened):
+
+```
+✗ auth crash loop: crashed 6 times within 2 minutes; not restarting it again
+✗ web not started, because auth keeps crashing (5 restarts), last: exited with error code 1
+✗ gateway not started, because web is blocked: auth keeps crashing (5 restarts), last: exited with error code 1
+  ✗ auth's setting JWT_SECRET is empty
+      why:  auth's error names it: JWT_SECRET is empty. Apps refuse to start, or fail on every request, without their secrets.
+      seen: its error: auth: JWT_SECRET is empty, refusing to start: login tokens can't be signed without it
+      seen: empty: JWT_SECRET
+      fix:  give JWT_SECRET a value in the service's env file (or environment:), then start it again
 ```
 
 When a stack worked yesterday and not today, `devdesk why` also lists what changed since the last clean start
@@ -92,12 +90,14 @@ adapters behind interfaces, so the core is tested with fakes.
 Runs on Linux. Tested on **Ubuntu 24.04** and on **Windows through WSL2** (Ubuntu). macOS is not supported.
 Prebuilt installers (.deb, AppImage) will come with the first release; for now, build from source.
 
-Needs JDK 25. Docker or Podman only if your projects use containers. A systemd user session (most Linux desktops;
-WSL2 with `systemd=true` in `/etc/wsl.conf`) gives the strongest cleanup guarantee.
+Needs git and JDK 25. Docker or Podman only if your projects use containers (the example project does). A systemd
+user session (most Linux desktops; WSL2 with `systemd=true` in `/etc/wsl.conf`) gives the strongest cleanup guarantee.
+On Ubuntu 24.04:
 
 ```bash
+sudo apt install git openjdk-25-jdk python3          # python3 is only for the example project
 git clone https://github.com/LouayChayeb/devdesk.git && cd devdesk
-./gradlew :cli:installDist
+./gradlew :cli:installDist                            # about 5 minutes the first time (downloads Gradle and libraries)
 export PATH="$PWD/cli/build/install/devdesk/bin:$PATH"
 ```
 
@@ -110,15 +110,19 @@ cd ui && npm install && npm run app
 
 ## Quick start
 
+One example project to try everything: 3 containers (Postgres, Redis, Mailpit) and 8 Python services. Needs Docker
+and python3.
+
 ```bash
-cd examples/three-tier      # db ← api ← web, needs only python3
+cd examples/full-stack
 devdesk why                 # checks ports, programs and settings first; runs nothing
 devdesk trust               # shows every command it will run, asks once
 devdesk up                  # starts in order, waits for health; Ctrl+C stops everything
 ```
 
-`examples/broken/` has one small project per typical failure (busy port, crash, wrong health check port...) to see
-each explanation.
+[examples/full-stack/README.md](examples/full-stack/README.md) lists what to try in the app, and one-line ways to
+break it on purpose (a taken port, a crash loop, an empty secret, an image update proven to break it) to see each
+explanation.
 
 Someone else's project, from its link:
 

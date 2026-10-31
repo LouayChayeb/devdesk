@@ -1,7 +1,0 @@
-version: 1
-name: broken-env
-services:
-  api:
-    command: python3 -m http.server 3008 --bind 127.0.0.1
-    directory: missing-env
-    environment: { PORT: "3008" }
