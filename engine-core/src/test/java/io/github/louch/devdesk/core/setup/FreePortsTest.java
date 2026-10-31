@@ -15,6 +15,29 @@ class FreePortsTest {
     }
 
     @Test
+    void twoCardsOnOnePortDontCollideTheContainerMovesAndCommandsAreWarned() {
+        // Found on excalidraw: its docs site (docusaurus, a command) and its app's container both wanted port 3000,
+        // free on the machine, so nothing moved and the container failed at start.
+        var draft = new SetupDraft(
+                "excalidraw",
+                List.of(),
+                List.of(
+                        service("app", "container", List.of("3000:80"), SetupDraft.Health.tcp(3000)),
+                        service("dev-docs", "command", List.of("3000"), SetupDraft.Health.tcp(3000)),
+                        service("storybook", "command", List.of("3000"), SetupDraft.Health.tcp(3000))),
+                List.of());
+
+        var after = FreePorts.apply(draft, port -> true).services();
+
+        assertThat(after.get(0).ports()).containsExactly("3001:80");
+        assertThat(after.get(0).health().target()).isEqualTo("3001");
+        assertThat(after.get(0).notes()).anyMatch(n -> n.startsWith("Port 3000 is taken by dev-docs (another card)"));
+        assertThat(after.get(1).notes()).isEmpty();
+        assertThat(after.get(2).ports()).containsExactly("3000");
+        assertThat(after.get(2).notes()).anyMatch(n -> n.startsWith("Port 3000 is also dev-docs's"));
+    }
+
+    @Test
     void aTakenHostPortMovesToTheNextFreeOneAndTheCardSaysWhere() {
         Set<Integer> taken = Set.of(8080, 8081, 5432);
         var draft = new SetupDraft(

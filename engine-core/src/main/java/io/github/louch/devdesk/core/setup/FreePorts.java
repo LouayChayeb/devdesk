@@ -1,8 +1,10 @@
 package io.github.louch.devdesk.core.setup;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.IntPredicate;
 
@@ -19,6 +21,12 @@ public final class FreePorts {
     public static SetupDraft apply(SetupDraft draft, IntPredicate free) {
         Set<Integer> used = new HashSet<>();
         draft.services().forEach(s -> used.addAll(s.hostPorts()));
+        // Two cards on one port collide the moment both start (excalidraw: its docs site and its app both on 3000).
+        // A command's port is its own setting, so commands keep theirs and a container moves out of the way.
+        Map<Integer, String> claimedBy = new HashMap<>();
+        draft.services().stream()
+                .filter(s -> !s.isContainer())
+                .forEach(s -> s.hostPorts().forEach(p -> claimedBy.putIfAbsent(p, s.name())));
         List<SetupDraft.Service> services = new ArrayList<>();
         for (SetupDraft.Service s : draft.services()) {
             List<String> ports = new ArrayList<>();
@@ -32,6 +40,11 @@ public final class FreePorts {
                         notes.add("Port " + p + " is taken by another program: stop it, or set this app's port to a"
                                 + " free one (often PORT in environment) before starting.");
                     }
+                    String other = p.matches("\\d{1,5}") ? claimedBy.get(Integer.parseInt(p)) : null;
+                    if (other != null && !other.equals(s.name())) {
+                        notes.add("Port " + p + " is also " + other + "'s: both can't run at once. Set one of them to"
+                                + " another port (often PORT in environment), or delete the card you don't need.");
+                    }
                     continue;
                 }
                 if (parts.length < 2 || !parts[parts.length - 2].matches("\\d{1,5}") || p.endsWith("/udp")) {
@@ -39,7 +52,9 @@ public final class FreePorts {
                     continue;
                 }
                 int host = Integer.parseInt(parts[parts.length - 2]);
-                if (free.test(host)) {
+                String other = claimedBy.get(host);
+                if (free.test(host) && other == null) {
+                    claimedBy.put(host, s.name());
                     ports.add(p);
                     continue;
                 }
@@ -48,10 +63,13 @@ public final class FreePorts {
                     next++;
                 }
                 used.add(next);
+                claimedBy.put(next, s.name());
                 parts[parts.length - 2] = String.valueOf(next);
                 ports.add(String.join(":", parts));
-                notes.add("Port " + host + " is taken by another program, so " + s.name() + " is published on " + next
-                        + " instead: open it at http://127.0.0.1:" + next + "/");
+                notes.add("Port " + host + " is taken by "
+                        + (other == null ? "another program" : other + " (another card)")
+                        + ", so " + s.name() + " is published on " + next + " instead: open it at http://127.0.0.1:"
+                        + next + "/");
                 if (health.target().equals(String.valueOf(host))) {
                     health = new SetupDraft.Health(health.type(), String.valueOf(next), health.startPeriod());
                 } else if (health.target().contains(":" + host + "/")
