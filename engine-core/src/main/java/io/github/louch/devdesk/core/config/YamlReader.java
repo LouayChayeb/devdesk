@@ -39,6 +39,11 @@ public final class YamlReader {
                     .filter(line -> !line.isBlank() && !Character.isWhitespace(line.charAt(0)))
                     .collect(Collectors.joining(": "));
             throw ConfigException.single(where, "", "not valid YAML: " + message);
+        } catch (IndexOutOfBoundsException | IllegalStateException e) {
+            // The YAML library itself failing on odd input (found by fuzzing: a lone half of a two-part character
+            // at the end of its 1024-character read buffer). Any text must get an answer, never a crash.
+            throw ConfigException.single(
+                    new Location(1, 1), "", "not valid YAML: the file has characters the YAML reader can't read");
         }
     }
 

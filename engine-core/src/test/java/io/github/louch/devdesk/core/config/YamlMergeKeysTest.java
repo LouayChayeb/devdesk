@@ -53,4 +53,18 @@ class YamlMergeKeysTest {
             assertThat(p.location().line()).isEqualTo(2);
         });
     }
+
+    @Test
+    void textTheYamlLibraryChokesOnIsAnErrorNotACrash() {
+        // Fuzzing found it: a lone high surrogate just past the library's first 1024 characters made it read past
+        // its own array (IndexOutOfBoundsException). From disk this can't happen (UTF-8 decoding never makes one).
+        String text = "#" + "a".repeat(1023) + "\uD800" + "b: c\n".repeat(10);
+
+        var e = catchThrowableOfType(ConfigException.class, () -> YamlReader.read(text));
+
+        assertThat(e.problems())
+                .singleElement()
+                .satisfies(p -> assertThat(p.message())
+                        .isEqualTo("not valid YAML: the file has characters the YAML reader can't read"));
+    }
 }

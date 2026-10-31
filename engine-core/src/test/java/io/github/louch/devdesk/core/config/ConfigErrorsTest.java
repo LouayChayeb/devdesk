@@ -53,6 +53,7 @@ class ConfigErrorsTest {
             { container: { image: a, ports: [x] } } | services.api.container.ports: expected "host:container" like "5432:5432", found "x"
             { container: { image: a, ports: ["0:80"] } }     | services.api.container.ports: ports go from 1 to 65535, found "0:80"
             { container: { image: a, ports: ["80:65536"] } } | services.api.container.ports: ports go from 1 to 65535, found "80:65536"
+            { container: { image: a, ports: ["99999999999:80"] } } | services.api.container.ports: ports go from 1 to 65535, found "99999999999:80"
             { container: { image: a, ports: 80 } }  | services.api.container.ports: expected a list like [a, b], found "80"
             { container: { image: a, tag: 1 } }     | services.api.container: unknown key "tag"
             { container: { build: { context: ., file: x } } } | services.api.container.build: unknown key "file"
@@ -76,6 +77,8 @@ class ConfigErrorsTest {
             { command: x, health: { type: process, timeout: soon } } | services.api.health.timeout: expected a duration like 500ms, 10s or 2m, found "soon"
             { command: x, restart: sometimes }      | services.api.restart: unknown restart policy "sometimes". Use no, on-failure or always
             { command: x, stop_grace_period: x }    | services.api.stop_grace_period: expected a duration like 500ms, 10s or 2m, found "x"
+            { command: x, stop_grace_period: 99999999999999999999s } | services.api.stop_grace_period: expected a duration like 500ms, 10s or 2m
+            { command: x, stop_grace_period: 9999999999999999h } | services.api.stop_grace_period: expected a duration like 500ms, 10s or 2m
             { command: x, sleep_after: 15m }        | services.api.sleep_after: a sleeping service is woken by a connection to its port: give it ports: first
             { command: x, watch: [../other] }       | services.api.watch: "../other" is outside the project folder
             { command: x, depends_on: [api] }       | services.api.depends_on: "api" can't depend on itself

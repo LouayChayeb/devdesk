@@ -524,8 +524,8 @@ public final class ConfigParser {
                 problem(node.location(), path, "expected \"host:container\" like \"5432:5432\", found \"" + t + "\"");
                 return Optional.empty();
             }
-            int host = Integer.parseInt(m.group(2));
-            int inside = m.group(3) == null ? host : Integer.parseInt(m.group(3));
+            int host = portNumber(m.group(2));
+            int inside = m.group(3) == null ? host : portNumber(m.group(3));
             if (host < 1 || host > 65_535 || inside < 1 || inside > 65_535) {
                 problem(node.location(), path, "ports go from 1 to 65535, found \"" + t + "\"");
                 return Optional.empty();
@@ -533,6 +533,11 @@ public final class ConfigParser {
             return Optional.of(new Workload.PortMapping(
                     m.group(1) == null ? "127.0.0.1" : m.group(1), host, inside, "udp".equals(m.group(4))));
         });
+    }
+
+    /** The digits as a port, or -1 when there are too many to be one (99999999999 would overflow an int). */
+    private static int portNumber(String digits) {
+        return digits.length() > 5 ? -1 : Integer.parseInt(digits);
     }
 
     /** Relative bind mounts ("./data:/var/lib/x") are made absolute; Docker would refuse a relative host path. */

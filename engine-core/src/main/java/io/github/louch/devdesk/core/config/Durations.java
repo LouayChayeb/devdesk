@@ -17,13 +17,17 @@ final class Durations {
         if (!m.matches()) {
             return Optional.empty();
         }
-        long n = Long.parseLong(m.group(1));
-        return Optional.of(
-                switch (m.group(2)) {
-                    case "ms" -> Duration.ofMillis(n);
-                    case "s" -> Duration.ofSeconds(n);
-                    case "m" -> Duration.ofMinutes(n);
-                    default -> Duration.ofHours(n);
-                });
+        try {
+            long n = Long.parseLong(m.group(1));
+            return Optional.of(
+                    switch (m.group(2)) {
+                        case "ms" -> Duration.ofMillis(n);
+                        case "s" -> Duration.ofSeconds(n);
+                        case "m" -> Duration.ofMinutes(n);
+                        default -> Duration.ofHours(n);
+                    });
+        } catch (NumberFormatException | ArithmeticException tooBig) {
+            return Optional.empty(); // more than a long holds: the caller says "expected a duration like 10s"
+        }
     }
 }
