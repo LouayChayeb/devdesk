@@ -51,6 +51,7 @@ public final class DockerImageReplay implements ImageReplay {
 
     /** Makes sure an image is on this machine. */
     interface ImageFetch {
+        /** Pulls {@code image} unless it's already here. Throws LaunchException when it can't be had. */
         void ensure(String image) throws LaunchException;
     }
 

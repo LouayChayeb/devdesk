@@ -30,6 +30,9 @@ public final class PullLog {
         return base.resolve("devdesk").resolve("pulls.txt");
     }
 
+    /**
+     * Notes that DevDesk pulled {@code image} for this project. A failed write is ignored: Remove then keeps the image.
+     */
     public synchronized void record(String image, String projectKey) {
         if (file.isEmpty() || entries().contains(image + "\t" + projectKey)) {
             return;
