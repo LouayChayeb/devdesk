@@ -23,7 +23,10 @@ application {
     mainClass = "io.github.louch.devdesk.cli.Main"
     applicationName = "devdesk" // name of the generated start script
     // engine-linux calls libc's kill() through FFM; without this Java prints a warning on every run.
-    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+    // UTF-8 output whatever the locale: in a bare container or an SSH session with no LANG, Java would turn every
+    // ✓ and ✗ into "?". Same flags as the .deb's launcher (packaging/linux/package.sh).
+    applicationDefaultJvmArgs =
+        listOf("--enable-native-access=ALL-UNNAMED", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
 }
 
 tasks.test {
