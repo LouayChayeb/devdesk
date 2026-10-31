@@ -59,7 +59,7 @@ final class PythonScripts {
             found.add(new SetupDraft.Service(
                     name,
                     "command",
-                    "python3 " + file,
+                    AppDetector.inVenv(read, "python3 " + file),
                     "",
                     "",
                     port.map(p -> List.of(String.valueOf(p))).orElse(List.of()),

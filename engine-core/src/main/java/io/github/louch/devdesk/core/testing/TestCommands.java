@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.core.testing;
 
+import io.github.louch.devdesk.core.doctor.Install;
 import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.project.ServiceSpec;
 import io.github.louch.devdesk.core.project.TaskSpec;
@@ -69,9 +70,12 @@ public final class TestCommands {
             var script = NPM_TEST_SCRIPT.matcher(packageJson.get());
             if (script.find() && !script.group(1).contains(NPM_PLACEHOLDER)) {
                 // The lock file says which package manager the project uses; mixing them breaks node_modules.
-                String npm = file.apply("pnpm-lock.yaml").isPresent()
-                        ? "pnpm"
-                        : file.apply("yarn.lock").isPresent() ? "yarn" : "npm";
+                // A version pinned in package.json wins, through corepack (see Install.pinnedManager).
+                String npm = Install.pinnedManager(file)
+                        .orElse(
+                                file.apply("pnpm-lock.yaml").isPresent()
+                                        ? "pnpm"
+                                        : file.apply("yarn.lock").isPresent() ? "yarn" : "npm");
                 return Optional.of(new Detected(npm + " test", "package.json"));
             }
         }

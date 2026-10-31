@@ -164,7 +164,7 @@ class FolderScanTest {
         assertThat(services).extracting(SetupDraft.Service::name).containsExactly("vote", "result", "worker");
         assertThat(services).allMatch(SetupDraft.Service::isContainer);
         assertThat(commands)
-                .containsEntry("vote", "flask --app app run --port 5000")
+                .containsEntry("vote", ".venv/bin/flask --app app run --port 5000")
                 .containsEntry("result", "node server.js")
                 .containsEntry("worker", "dotnet Worker.dll");
     }
@@ -337,7 +337,53 @@ class FolderScanTest {
 
         assertThat(services)
                 .extracting(SetupDraft.Service::command)
-                .containsExactly("flask --app microblog run --port 5000");
+                .containsExactly(".venv/bin/flask --app microblog run --port 5000");
+    }
+
+    @Test
+    void aPinnedPackageManagerRunsThroughCorepack() {
+        // Like outline (yarn@4) and hoppscotch (pnpm@10): a plain yarn refuses them ("Corepack must currently be
+        // enabled"), and pnpm may not be installed at all. Corepack comes with Node and runs the pinned version.
+        var folder = new FakeFolder(
+                "outline",
+                Map.of(
+                        "package.json",
+                        "{\"packageManager\": \"yarn@4.18.0\", \"scripts\": {\"dev\": \"node server.js\"},"
+                                + " \"dependencies\": {\"koa\": \"2\"}}",
+                        "yarn.lock",
+                        ""));
+
+        var app = FolderScan.scan(folder, "/home/me/outline", List.of())
+                .draft()
+                .services()
+                .getFirst();
+
+        assertThat(app.command()).isEqualTo("corepack yarn dev");
+        assertThat(app.notes()).anySatisfy(n -> assertThat(n).contains("run \"corepack yarn install\""));
+    }
+
+    @Test
+    void aDjangoAppWithRequirementsRunsWithItsVenv() {
+        // Like healthchecks/healthchecks: Set up installs requirements.txt into .venv, so the server and its first-run
+        // card must use .venv/bin/python3. With plain python3 neither sees Django, and DevDesk asked the user to edit
+        // both.
+        var folder = new FakeFolder(
+                "healthchecks",
+                Map.of(
+                        "manage.py",
+                        "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hc.settings')\n"
+                                + "from django.core.management import execute_from_command_line\n",
+                        "requirements.txt",
+                        "Django==6.1.2\n"));
+
+        var services = FolderScan.scan(folder, "/home/me/healthchecks", List.of())
+                .draft()
+                .services();
+
+        assertThat(services)
+                .extracting(SetupDraft.Service::command)
+                .containsExactlyInAnyOrder(
+                        ".venv/bin/python3 manage.py runserver 127.0.0.1:8000", ".venv/bin/python3 manage.py migrate");
     }
 
     @Test

@@ -3,6 +3,8 @@ package io.github.louch.devdesk.core.doctor;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** How to install a tool or a project's packages, as commands to copy. Shown to the user, never run automatically. */
 public final class Install {
@@ -43,8 +45,27 @@ public final class Install {
         };
     }
 
+    /** {@code "packageManager": "yarn@4.18.0"} in package.json: the manager and version the project pins. */
+    private static final Pattern PINNED = Pattern.compile("\"packageManager\"\\s*:\\s*\"(yarn|pnpm)@");
+
+    /**
+     * The package manager package.json pins (yarn or pnpm), run through corepack, which comes with Node: it uses
+     * exactly the pinned version with nothing installed globally and no "corepack enable" (a plain yarn refuses such
+     * a project: "Corepack must currently be enabled"). Empty when nothing is pinned, or npm (it comes with Node).
+     */
+    public static Optional<String> pinnedManager(Function<String, Optional<String>> read) {
+        return read.apply("package.json").flatMap(pkg -> {
+            Matcher m = PINNED.matcher(pkg);
+            return m.find() ? Optional.of("corepack " + m.group(1)) : Optional.empty();
+        });
+    }
+
     /** The install command matching the folder's lock file: each manager installs from its own. */
     public static String nodeInstall(Function<String, Optional<String>> read) {
+        Optional<String> pinned = pinnedManager(read);
+        if (pinned.isPresent()) {
+            return pinned.get() + " install";
+        }
         if (read.apply("pnpm-lock.yaml").isPresent()) {
             return "pnpm install";
         }

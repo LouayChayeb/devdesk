@@ -28,6 +28,12 @@ class TestCommandsTest {
                         .orElseThrow()
                         .command())
                 .isEqualTo("yarn test");
+        // Pinned in package.json (like outline: "yarn@4.18.0"): through corepack, whatever yarn is installed.
+        String pinned = "{\"packageManager\": \"yarn@4.18.0\", \"scripts\": {\"test\": \"jest\"}}";
+        assertThat(detect(Map.of("package.json", pinned, "yarn.lock", ""))
+                        .orElseThrow()
+                        .command())
+                .isEqualTo("corepack yarn test");
     }
 
     @Test

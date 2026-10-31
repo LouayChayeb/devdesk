@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.core.setup;
 
+import io.github.louch.devdesk.core.doctor.Install;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -102,15 +103,19 @@ final class AppDetector {
         }
         String body = scripts.path(script.get()).asString("");
         // Each package manager keeps its own lock file; running another one would install different versions.
-        String runner = read.apply("pnpm-lock.yaml").isPresent()
-                ? "pnpm run "
-                : read.apply("yarn.lock").isPresent()
-                        ? "yarn "
-                        : read.apply("bun.lock")
-                                        .or(() -> read.apply("bun.lockb"))
-                                        .isPresent()
-                                ? "bun run "
-                                : "npm run ";
+        // A version pinned in package.json wins, through corepack (see Install.pinnedManager).
+        Optional<String> pinned = Install.pinnedManager(read);
+        String runner = pinned.isPresent()
+                ? pinned.get() + (pinned.get().endsWith("pnpm") ? " run " : " ")
+                : read.apply("pnpm-lock.yaml").isPresent()
+                        ? "pnpm run "
+                        : read.apply("yarn.lock").isPresent()
+                                ? "yarn "
+                                : read.apply("bun.lock")
+                                                .or(() -> read.apply("bun.lockb"))
+                                                .isPresent()
+                                        ? "bun run "
+                                        : "npm run ";
         Optional<Integer> port = first(PORT_FLAG, body)
                 .or(() -> read.apply(".env").flatMap(env -> first(ENV_PORT, env)))
                 .or(() -> defaultNodePort(body));
@@ -126,8 +131,7 @@ final class AppDetector {
                 .or(() -> read.apply("node_modules/.yarn-integrity"))
                 .isPresent();
         List<String> notes = hasPackages && !installed
-                ? List.of("Its packages aren't installed yet: run \""
-                        + runner.replace(" run ", " ").strip().replaceAll("^(npm|pnpm|bun)$", "$1 install") + "\" in ./"
+                ? List.of("Its packages aren't installed yet: run \"" + Install.nodeInstall(read) + "\" in ./"
                         + dir
                         + " once, or the start command will fail.")
                 : List.of();
@@ -184,7 +188,7 @@ final class AppDetector {
                 });
         if (flaskApp.isPresent() && deps.toLowerCase().contains("flask")) {
             return Optional.of(new ComposeImport.DetectedApp(
-                    "flask --app " + flaskApp.get() + " run --port 5000",
+                    inVenv(read, "flask --app " + flaskApp.get() + " run --port 5000"),
                     Optional.of(5000),
                     Optional.empty(),
                     where(dir, ".flaskenv") + " FLASK_APP",
@@ -200,7 +204,9 @@ final class AppDetector {
             Matcher fast = FASTAPI.matcher(code.get());
             if (fast.find() && deps.toLowerCase().contains("fastapi")) {
                 return Optional.of(new ComposeImport.DetectedApp(
-                        "uvicorn " + module + ":" + fast.group(1) + " --reload --host 127.0.0.1 --port 8000",
+                        inVenv(
+                                read,
+                                "uvicorn " + module + ":" + fast.group(1) + " --reload --host 127.0.0.1 --port 8000"),
                         Optional.of(8000),
                         Optional.empty(),
                         where(dir, file) + " (FastAPI)",
@@ -210,7 +216,7 @@ final class AppDetector {
             Matcher flask = FLASK.matcher(code.get());
             if (flask.find() && deps.toLowerCase().contains("flask")) {
                 return Optional.of(new ComposeImport.DetectedApp(
-                        "flask --app " + module + " run --port 5000",
+                        inVenv(read, "flask --app " + module + " run --port 5000"),
                         Optional.of(5000),
                         Optional.empty(),
                         where(dir, file) + " (Flask)",
@@ -291,7 +297,7 @@ final class AppDetector {
         if (script.contains("astro")) {
             return Optional.of(4321);
         }
-        if (script.matches(".*\\b(next|nuxt|react-scripts|nest start)\\b.*")) {
+        if (script.matches(".*\\b(next|nuxt|react-scripts|nest start|docusaurus)\\b.*")) {
             return Optional.of(3000);
         }
         return Optional.empty();
@@ -338,11 +344,20 @@ final class AppDetector {
         return read.apply("manage.py")
                 .filter(m -> m.contains("django"))
                 .map(m -> new ComposeImport.DetectedApp(
-                        "python3 manage.py runserver 127.0.0.1:8000",
+                        inVenv(read, "python3 manage.py runserver 127.0.0.1:8000"),
                         Optional.of(8000),
                         Optional.empty(),
                         where(dir, "manage.py"),
                         List.of()));
+    }
+
+    /**
+     * The command with the program from the folder's {@code .venv} when it has a requirements.txt: that's where Set up
+     * installs the packages (Ubuntu forbids pip in the system Python, PEP 668), so a plain {@code python3} or
+     * {@code uvicorn} wouldn't find them. Without a requirements.txt the command stays as it is.
+     */
+    static String inVenv(Function<String, Optional<String>> read, String command) {
+        return read.apply("requirements.txt").isPresent() ? ".venv/bin/" + command : command;
     }
 
     private static String where(String dir, String file) {
