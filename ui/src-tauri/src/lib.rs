@@ -54,6 +54,7 @@ fn is_tooling_path(entry: &str) -> bool {
         || entry.contains("/src-tauri/target/")
 }
 
+/// This app's environment without the developer tools' own variables and paths, for the engine and every service.
 fn clean_environment() -> Vec<(String, String)> {
     std::env::vars()
         .filter(|(k, _)| !is_tooling_variable(k))
@@ -70,6 +71,8 @@ fn clean_environment() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Starts `devdeskd` and reads its first stdout line, `{"port":...,"token":...}`. Fails with a plain message
+/// when the engine is missing or exits before saying where it listens.
 fn start_engine(app: &tauri::AppHandle) -> Result<(Child, Connection), String> {
     let path = engine_path(app);
     let mut child = Command::new(&path)
@@ -110,6 +113,7 @@ fn engine_connection(app: tauri::AppHandle, state: State<Mutex<Engine>>) -> Resu
     Ok(engine.connection.clone().expect("set above"))
 }
 
+/// Runs the desktop app. On exit it closes the engine's stdin and waits up to 60 s for it to stop every service.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()

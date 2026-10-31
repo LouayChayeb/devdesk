@@ -35,6 +35,10 @@ import { ProjectSwitch } from './project-switch';
 const RECENT_KEY = 'devdesk.recent';
 const UI_KEY = 'devdesk.ui';
 
+/**
+ * The main window: the left navigation, the page shown, the log panel at the bottom, pop-ups and keyboard shortcuts.
+ * Everything it shows comes from the engine (engine.ts); it only remembers layout choices and recent projects in localStorage.
+ */
 @Component({
   selector: 'app-root',
   imports: [StatusDot, ServicesTable, LogsPanel, DiagnosisPanel, TimelinePanel, ConnectionsPanel, ServiceDrawer, GraphPanel, PortsPanel, CommandPalette, Icon, DataPanel, ApiPanel, MailPanel, DocView, SetupWizard, FreshSetup, GetProject, RemoveProject, EnvEditor, TasksBar, LogSearch, ProjectSwitch, ShellView, TestsPage, SnapshotsView, RemoteViewComponent],
