@@ -22,8 +22,9 @@ evidence and the fix.
 - **It cleans up after itself, and only after itself.** Every service runs in its own systemd scope (or a process
   group with a random marker), containers carry the project's label. Stopping stops every child and grandchild.
   Nothing is ever killed by name or by port. If DevDesk itself is killed, the next start finds what it left.
-- **It can get someone else's project running.** Paste a GitHub link: DevDesk clones it, reads its compose file and
-  Dockerfiles, asks before running anything, starts it, and later removes everything it made with one click.
+- **It helps you run someone else's project.** Paste a GitHub link: DevDesk clones it, reads its compose file and
+  Dockerfiles, drafts a setup you can check, asks before running anything, and starts what it can. One click later
+  removes everything it made.
 
 ## See it explain a failure
 
@@ -60,9 +61,9 @@ And a secret someone forgot to fill in (`JWT_SECRET= devdesk up`, shortened):
 ```
 
 When a stack worked yesterday and not today, `devdesk why` also lists what changed since the last clean start
-(images, lock files, settings, code), ranked against what fails now. An image change can be **proven**: DevDesk
-replays the old and the new image side by side in throwaway containers, with fresh empty copies of the databases they
-need, and nothing of yours is touched.
+(images, lock files, settings, code), ranked against what fails now. An image change can be **proven** while the
+old image is still on your machine: DevDesk replays the old and the new image side by side in throwaway containers,
+with fresh empty copies of the databases they need, and nothing of yours is touched.
 
 ## How it works
 
@@ -131,6 +132,10 @@ devdesk get https://github.com/owner/project   # clone, propose a devdesk.yaml, 
 devdesk remove ~/DevDesk/project               # later: delete everything DevDesk made for it, then check again
 ```
 
+This works best when the project's compose file starts the whole app. When it only starts the databases, or the
+project wants a newer Node or Python than your machine has, expect to do a step or two yourself: `devdesk doctor` and
+`devdesk why` show what's missing. Public `https` links only for now (no private repos or SSH).
+
 ![The Get a project from a link dialog](.github/assets/get-dialog.png)
 
 Other commands: `devdesk ps` (what runs, and leftovers), `devdesk history` (what happened while you weren't
@@ -159,7 +164,10 @@ The others are mature and widely used; DevDesk is new. Its focus is answering "w
 - **120 hard kills, 0 leftovers**: on those 15 projects, DevDesk itself was killed 8 different ways (CLI and app,
   systemd scope and process group modes, while starting and while running), and every time the next start found and
   stopped what it had left.
-- **About 890 automated tests** in CI on every push: unit tests with fakes, real Linux processes, real Docker, real
+- **6 more projects from a pasted link**, including Excalidraw and Directus. They turned up 16 bugs (projects split
+  into many packages, pinned package managers, Python virtual environments, compose profiles, Docker builds on WSL),
+  all fixed, each with a test.
+- **Over 900 automated tests** in CI on every push: unit tests with fakes, real Linux processes, real Docker, real
   databases, 15 crash points where DevDesk is killed on purpose, randomized ownership tests with bystander processes
   that must never get a signal, fuzzing and mutation testing.
 
