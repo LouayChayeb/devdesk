@@ -7,6 +7,7 @@ import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
 import io.github.louch.devdesk.linux.doctor.ToolVersions;
 import io.github.louch.devdesk.linux.health.LocalHealthProbe;
 import io.github.louch.devdesk.linux.network.ProcNetListeners;
+import io.github.louch.devdesk.linux.process.CorepackShims;
 import io.github.louch.devdesk.linux.process.GroupLeftovers;
 import io.github.louch.devdesk.linux.process.LinuxProcessRuntime;
 import io.github.louch.devdesk.linux.process.ProcessLeftovers;
@@ -35,7 +36,8 @@ public final class Main {
         // The engine runs inside the CLI process: the CLI never talks to the daemon (that was M3, skipped).
         var clock = Clock.systemUTC();
         var random = new SecureRandom();
-        var env = System.getenv();
+        // pnpm and yarn by name for every setup step and service, through corepack (see CorepackShims).
+        var env = CorepackShims.addTo(System.getenv());
         var runtime = LinuxProcessRuntime.detect(clock, random, new GroupLeftovers(GroupLeftovers.defaultFolder(env)));
         // Health-check commands are short-lived: a plain process group is enough, and avoids a systemd unit per probe.
         var probe = new LocalHealthProbe(new LinuxProcessRuntime(false, clock, random));

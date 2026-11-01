@@ -37,6 +37,7 @@ import io.github.louch.devdesk.linux.diagnosis.LinuxIntrospection;
 import io.github.louch.devdesk.linux.doctor.ToolVersions;
 import io.github.louch.devdesk.linux.health.LocalHealthProbe;
 import io.github.louch.devdesk.linux.network.ProcNetListeners;
+import io.github.louch.devdesk.linux.process.CorepackShims;
 import io.github.louch.devdesk.linux.process.GroupLeftovers;
 import io.github.louch.devdesk.linux.process.LinuxProcessRuntime;
 import io.github.louch.devdesk.linux.process.ProcessLeftovers;
@@ -71,7 +72,8 @@ public final class Main {
      * gets a signal.
      */
     public static void main(String[] args) throws Exception {
-        var env = System.getenv();
+        // pnpm and yarn by name for every setup step and service, through corepack (see CorepackShims).
+        var env = CorepackShims.addTo(System.getenv());
         var clock = Clock.systemUTC();
         var random = new SecureRandom();
         var listeners = new ProcNetListeners();
