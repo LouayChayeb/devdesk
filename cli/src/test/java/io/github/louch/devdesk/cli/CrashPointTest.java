@@ -196,6 +196,9 @@ class CrashPointTest {
     void aKillDuringProveItLeavesNoReplicas() throws Exception {
         String name = "crash-proof-" + UUID.randomUUID().toString().substring(0, 8);
         String image = name + ":latest";
+        // A second name for the first image: rebuilding :latest leaves it with no name, and Docker 29 (CI's Ubuntu
+        // 26.04 runner) then deletes it, so there was nothing to replay. "Prove it" needs that image to still exist.
+        String before = name + ":before";
         int port = freePort();
         Path project = Files.createDirectories(home.resolve(name));
         Files.writeString(project.resolve("devdesk.yaml"), """
@@ -218,6 +221,7 @@ class CrashPointTest {
             awaitLine(upOut, "is up.", up);
             up.destroy();
             assertThat(up.waitFor(60, TimeUnit.SECONDS)).isTrue();
+            assertThat(run("docker", "tag", image, before).ok()).isTrue();
             // The tag now names a broken image: the verdict has an image change to prove.
             build(image, "LABEL devdesk.test=v2\nCMD [\"sh\", \"-c\", \"exit 1\"]");
 
@@ -236,7 +240,7 @@ class CrashPointTest {
             assertThat(String.join("\n", againOut)).contains("PROVEN");
             assertThat(proofs()).as("replicas left after the next proof").isEmpty();
         } finally {
-            run("docker", "rmi", "-f", image); // the image this test built
+            run("docker", "rmi", "-f", image, before); // the images this test built
         }
     }
 
