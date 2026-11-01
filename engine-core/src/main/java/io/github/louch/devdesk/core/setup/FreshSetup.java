@@ -214,6 +214,21 @@ public final class FreshSetup {
                             installDir,
                             install));
                 }
+                // directus: app imports its sibling packages ("workspace:*") from their dist/ folders, which only a
+                // build of the workspace makes. Its docs say "pnpm build" once before "pnpm dev"; without it the app
+                // crashed on missing files.
+                if (member
+                        && here.apply("package.json").orElse("").contains("\"workspace:")
+                        && hasScript(read, "build")
+                        && steps.stream().noneMatch(st -> st.id().equals("build:"))) {
+                    String build = Install.nodeRun(read, "build");
+                    steps.add(new Step.Run(
+                            "build:",
+                            "Build the workspace's own packages once (" + build + " in the project folder): its apps"
+                                    + " use them from their build output",
+                            "",
+                            build));
+                }
             } else if (here.apply("pom.xml").isPresent()) {
                 String mvn = here.apply("mvnw").isPresent() ? "./mvnw" : "mvn";
                 steps.add(new Step.Run(
@@ -261,6 +276,17 @@ public final class FreshSetup {
                                         + "command to \".venv/bin/" + s.command() + "\" in Edit setup."));
             }
         });
+    }
+
+    private static final Pattern SCRIPTS = Pattern.compile("\"scripts\"\\s*:\\s*\\{([^}]*)\\}", Pattern.DOTALL);
+
+    /** Whether the project folder's package.json has {@code script} in its "scripts". */
+    private static boolean hasScript(Function<String, Optional<String>> read, String script) {
+        return read.apply("package.json")
+                .map(SCRIPTS::matcher)
+                .filter(Matcher::find)
+                .map(m -> m.group(1).contains("\"" + script + "\""))
+                .orElse(false);
     }
 
     /** Services others wait for with "finished OK": migrations, seeds. They run once, then everything stops. */

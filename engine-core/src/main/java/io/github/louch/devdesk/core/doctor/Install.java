@@ -60,6 +60,22 @@ public final class Install {
         });
     }
 
+    /** {@code npm run <script>} the way the folder's package manager says it (pinned, or by its lock file). */
+    public static String nodeRun(Function<String, Optional<String>> read, String script) {
+        String manager = pinnedManager(read)
+                .orElse(
+                        read.apply("pnpm-lock.yaml").isPresent()
+                                ? "pnpm"
+                                : read.apply("yarn.lock").isPresent()
+                                        ? "yarn"
+                                        : read.apply("bun.lock")
+                                                        .or(() -> read.apply("bun.lockb"))
+                                                        .isPresent()
+                                                ? "bun"
+                                                : "npm");
+        return manager + (manager.endsWith("yarn") ? " " : " run ") + script;
+    }
+
     /** The install command matching the folder's lock file: each manager installs from its own. */
     public static String nodeInstall(Function<String, Optional<String>> read) {
         Optional<String> pinned = pinnedManager(read);

@@ -95,6 +95,32 @@ class FreshSetupTest {
     }
 
     @Test
+    void anAppUsingItsWorkspacesOwnPackagesGetsTheWorkspaceBuiltOnceAfterTheInstall() throws Exception {
+        // Found on directus: app imports @directus/extensions ("workspace:*") from its dist/, which only "pnpm build"
+        // makes. Installed but not built, app and sdk crashed on missing files.
+        var draft = ExistingSetup.read("""
+                version: 1
+                services:
+                  app: { command: corepack pnpm run dev, directory: app }
+                  sdk: { command: corepack pnpm run dev, directory: sdk }
+                """, "directus");
+        Map<String, String> files = Map.of(
+                "package.json",
+                "{\"packageManager\": \"pnpm@12.4.1\", \"scripts\": {\"build\": \"pnpm --recursive run build\"}}",
+                "pnpm-workspace.yaml",
+                "packages:\n  - app\n  - sdk\n",
+                "app/package.json",
+                "{\"dependencies\": {\"@directus/extensions\": \"workspace:*\"}}",
+                "sdk/package.json",
+                "{\"dependencies\": {\"@directus/system-data\": \"workspace:*\"}}");
+
+        var plan = FreshSetup.of(draft, f -> Optional.ofNullable(files.get(f)), files::containsKey);
+
+        assertThat(plan.steps()).extracting(FreshSetup.Step::id).containsExactly("install:", "build:");
+        assertThat(((FreshSetup.Step.Run) plan.steps().get(1)).command()).isEqualTo("corepack pnpm run build");
+    }
+
+    @Test
     void withoutAnExampleTheVariablesDevdeskYamlUsesAreAsked() throws Exception {
         var env = (FreshSetup.Step.CreateEnv) plan(Map.of()).steps().getFirst();
 
