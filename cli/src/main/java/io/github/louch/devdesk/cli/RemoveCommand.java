@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.cli;
 
+import io.github.louch.devdesk.core.project.ProjectSpec;
 import io.github.louch.devdesk.core.removal.ProjectRemoval;
 import io.github.louch.devdesk.core.removal.RemovalPort;
 import io.github.louch.devdesk.docker.DockerConnection;
@@ -7,12 +8,14 @@ import io.github.louch.devdesk.linux.get.GitClone;
 import io.github.louch.devdesk.linux.process.GroupLeftovers;
 import io.github.louch.devdesk.linux.process.ProcessLeftovers;
 import io.github.louch.devdesk.linux.process.ScopeLeftovers;
+import io.github.louch.devdesk.linux.project.ProjectLoader;
 import io.github.louch.devdesk.linux.project.ProjectLock;
 import io.github.louch.devdesk.linux.removal.LocalRemoval;
 import io.github.louch.devdesk.linux.trust.TrustStore;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.util.ArrayList;
@@ -59,11 +62,27 @@ final class RemoveCommand implements Callable<Integer> {
     @Override
     public Integer call() throws IOException {
         Path root = folder.toAbsolutePath().normalize();
-        Optional<ProjectFile> loaded = ProjectFile.load(root.resolve("devdesk.yaml"), env, err);
+        // A fresh clone can't run before Set up made its .env, but it must still be removable: Remove needs only the
+        // project's name and folder, so it reads the file the way the setup wizard does (env files from examples).
+        Optional<ProjectSpec> loaded = switch (ProjectLoader.load(root.resolve("devdesk.yaml"), env)) {
+            case ProjectLoader.Result.Loaded l -> Optional.of(l.project());
+            case ProjectLoader.Result.Invalid i ->
+                switch (ProjectLoader.loadForSetup(root, Files.readString(i.file()), env)) {
+                    case ProjectLoader.Result.Loaded l -> Optional.of(l.project());
+                    default -> {
+                        err.println(i.message());
+                        yield Optional.empty();
+                    }
+                };
+            case ProjectLoader.Result.Missing m -> {
+                err.println("devdesk: " + m.message());
+                yield Optional.empty();
+            }
+        };
         if (loaded.isEmpty()) {
             return ProjectFile.INVALID;
         }
-        var project = loaded.get().project();
+        var project = loaded.get();
         // Nothing of it may run while it's removed: the lock proves no other DevDesk runs it.
         try (ProjectLock lock = switch (ProjectLock.acquire(env, project, "devdesk remove")) {
             case ProjectLock.Result.Acquired a -> a.lock();
