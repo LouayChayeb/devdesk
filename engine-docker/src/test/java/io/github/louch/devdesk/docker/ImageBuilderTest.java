@@ -54,7 +54,9 @@ class ImageBuilderTest {
                         "W: Temporary failure resolving 'archive.ubuntu.com'",
                         "dial tcp: lookup proxy.golang.org on 10.255.255.254:53: no such host",
                         "nslookup: can't resolve 'x': bad address",
-                        "WARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.24/main: DNS lookup error"))
+                        // apk's real line, copied from a failed build on this machine
+                        "WARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz:"
+                                + " DNS: transient error (try again later)"))
                 .allMatch(line -> ImageBuilder.offline(List.of(line)));
         assertThat(ImageBuilder.offline(List.of("npm ERR! missing script: build")))
                 .isFalse();
