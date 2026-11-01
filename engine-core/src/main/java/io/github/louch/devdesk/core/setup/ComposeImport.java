@@ -5,6 +5,7 @@ import io.github.louch.devdesk.core.config.YamlNode;
 import io.github.louch.devdesk.core.config.YamlReader;
 import io.github.louch.devdesk.core.container.ContainerRuntime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -112,6 +113,22 @@ public final class ComposeImport {
         if (raw.isEmpty()) {
             notes.add("docker-compose.yml has no services.");
         }
+        // docker compose only starts services without profiles; the others are alternatives to choose from
+        // (hoppscotch: "default", "app", "deprecated"... which "would conflict on ports" if mixed). All of them at once
+        // made 12 cards fighting over the same ports. A profile named "default" is the file's own usual choice.
+        List<String> leftOut = new ArrayList<>();
+        raw.entrySet().removeIf(e -> {
+            List<String> profiles = profiles(e.getValue());
+            boolean out = !profiles.isEmpty() && !profiles.contains("default");
+            if (out) {
+                leftOut.add(e.getKey() + " (" + String.join(", ", profiles) + ")");
+            }
+            return out;
+        });
+        if (!leftOut.isEmpty()) {
+            notes.add("Left out because docker compose doesn't start them by default (they're in compose profiles): "
+                    + String.join(", ", leftOut) + ". Add one with Add service if you need it.");
+        }
         // Container port → host port per service, to point commands at containers through the host.
         Map<String, Map<Integer, Integer>> published = new LinkedHashMap<>();
         raw.forEach((name, s) -> published.put(name, portMap(ports(s, name, new ArrayList<>()))));
@@ -128,7 +145,26 @@ public final class ComposeImport {
 
         List<SetupDraft.Service> services = new ArrayList<>();
         raw.forEach((name, s) -> services.add(service(serviceName(name), s, published)));
+        // A kept service may name one that was left out (a "default" migrate waiting for a "deprecated" db).
+        Set<String> kept = new HashSet<>();
+        services.forEach(sv -> kept.add(sv.name()));
+        services.replaceAll(sv -> {
+            Map<String, String> deps = new LinkedHashMap<>(sv.dependsOn());
+            return deps.keySet().removeIf(d -> !kept.contains(d)) ? sv.withDependsOn(deps) : sv;
+        });
         return new Result(services, List.copyOf(envFiles), List.copyOf(notes));
+    }
+
+    /** The compose profiles a service belongs to; empty for a service compose always starts. */
+    private static List<String> profiles(YamlNode.Mapping service) {
+        return entry(service, "profiles")
+                .filter(p -> p instanceof YamlNode.Sequence)
+                .map(p -> ((YamlNode.Sequence) p)
+                        .items().stream()
+                                .map(ComposeImport::text)
+                                .flatMap(Optional::stream)
+                                .toList())
+                .orElse(List.of());
     }
 
     /** Keys whose value the override replaces as a whole, as compose does: a command isn't added to, it's changed. */

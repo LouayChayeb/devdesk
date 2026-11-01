@@ -65,6 +65,26 @@ class ComposeImportTest {
     }
 
     @Test
+    void servicesInComposeProfilesAreLeftOutExceptTheDefaultOne() throws Exception {
+        // Like hoppscotch: every service is in a profile ("default", "app", "deprecated"...) that "would conflict on
+        // ports" if mixed. docker compose starts none of them unless asked; DevDesk had started all 12 at once.
+        var result = ComposeImport.read("""
+                services:
+                  backend: { image: hoppscotch/backend, profiles: ["backend", "app"], ports: ["3170:3170"] }
+                  aio: { image: hoppscotch/aio, profiles: ["default"], ports: ["3000:3000"], depends_on: [db, old] }
+                  db: { image: "postgres:15", profiles: ["default", "backend"] }
+                  old: { image: hoppscotch/old, profiles: ["deprecated"], ports: ["3000:3000"] }
+                  mail: { image: axllent/mailpit }
+                """, "shop", "shop", dir -> Optional.empty());
+
+        assertThat(result.services()).extracting(SetupDraft.Service::name).containsExactly("aio", "db", "mail");
+        assertThat(result.services().getFirst().dependsOn()).containsOnlyKeys("db");
+        assertThat(result.notes())
+                .anySatisfy(
+                        n -> assertThat(n).contains("backend (backend, app)").contains("old (deprecated)"));
+    }
+
+    @Test
     void imagesBecomeContainersWithTheirPortsEnvAndVolumes() {
         var db = card("db");
 
