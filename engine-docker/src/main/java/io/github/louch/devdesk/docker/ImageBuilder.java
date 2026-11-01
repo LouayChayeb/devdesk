@@ -143,7 +143,7 @@ final class ImageBuilder {
     /**
      * Whether the build failed because it couldn't reach the internet. Each tool words it its own way: pip and curl
      * ("temporary failure in name resolution", "could not resolve"), apt ("temporary failure resolving"), npm and
-     * yarn ("getaddrinfo EAI_AGAIN", "ENOTFOUND"; found on excalidraw), Go ("no such host"), busybox ("bad address").
+     * yarn ("getaddrinfo EAI_AGAIN", "ENOTFOUND"; found on excalidraw), Go ("no such host"), busybox ("bad address"), Alpine's apk ("DNS lookup error"; found on hoppscotch).
      */
     static boolean offline(List<String> last) {
         String text = String.join("\n", last).toLowerCase();
@@ -159,7 +159,9 @@ final class ImageBuilder {
                         "no such host",
                         "name or service not known",
                         "bad address",
-                        "network is unreachable")
+                        "network is unreachable",
+                        "dns lookup error",
+                        "temporary error (try again later)")
                 .anyMatch(text::contains);
     }
 

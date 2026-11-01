@@ -53,7 +53,8 @@ class ImageBuilderTest {
                         "npm error code ENOTFOUND",
                         "W: Temporary failure resolving 'archive.ubuntu.com'",
                         "dial tcp: lookup proxy.golang.org on 10.255.255.254:53: no such host",
-                        "nslookup: can't resolve 'x': bad address"))
+                        "nslookup: can't resolve 'x': bad address",
+                        "WARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.24/main: DNS lookup error"))
                 .allMatch(line -> ImageBuilder.offline(List.of(line)));
         assertThat(ImageBuilder.offline(List.of("npm ERR! missing script: build")))
                 .isFalse();
