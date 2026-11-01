@@ -1,5 +1,6 @@
 package io.github.louch.devdesk.core.setup;
 
+import io.github.louch.devdesk.core.doctor.Install;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -7,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -53,6 +55,15 @@ public final class FirstRun {
         }
         if (read.apply("alembic.ini").isPresent()) {
             return Optional.of(new Known("Alembic", "alembic upgrade head", Pattern.compile("alembic\\s+upgrade")));
+        }
+        // The project's own migrate script (documenso: "prisma:migrate-dev", run by its "npm run dx"): whatever tool
+        // it uses inside, the script is how the project wants its tables made.
+        Optional<String> script = read.apply("package.json").flatMap(FirstRun::migrateScript);
+        if (script.isPresent()) {
+            return Optional.of(new Known(
+                    "Node (its \"" + script.get() + "\" script)",
+                    Install.nodeRun(read, script.get()),
+                    Pattern.compile("\\b" + Pattern.quote(script.get()) + "\\b")));
         }
         return Optional.empty();
     }
@@ -219,6 +230,28 @@ public final class FirstRun {
     private static boolean alreadyDone(SetupDraft draft, Known known) {
         return draft.services().stream()
                 .anyMatch(s -> known.done().matcher(s.command()).find());
+    }
+
+    /** A script name in package.json like {@code "db:migrate": ...}; not the ones that undo or create migrations. */
+    private static final Pattern MIGRATE_SCRIPT = Pattern.compile("\"([\\w:.-]*migrate[\\w:.-]*)\"\\s*:");
+
+    private static final Pattern NOT_APPLYING =
+            Pattern.compile("(?i)(reset|rollback|undo|down|create|make|generate|new|status|revert|fresh|refresh)");
+
+    private static final Pattern SCRIPTS = Pattern.compile("\"scripts\"\\s*:\\s*\\{([^}]*)\\}", Pattern.DOTALL);
+
+    private static Optional<String> migrateScript(String packageJson) {
+        Matcher block = SCRIPTS.matcher(packageJson);
+        if (!block.find()) {
+            return Optional.empty(); // a dependency called "knex-migrate" is no script
+        }
+        Matcher m = MIGRATE_SCRIPT.matcher(block.group(1));
+        while (m.find()) {
+            if (!NOT_APPLYING.matcher(m.group(1)).find()) {
+                return Optional.of(m.group(1));
+            }
+        }
+        return Optional.empty();
     }
 
     /** The Python the service itself uses ({@code .venv/bin/python}), so the packages it sees are there. */

@@ -68,6 +68,83 @@ public final class FolderScan {
 
     private FolderScan() {}
 
+    /** {@code docker compose -f docker/development/compose.yml up -d} in a package.json script. */
+    private static final Pattern COMPOSE_IN_SCRIPT =
+            Pattern.compile("docker[ -]compose\\s+(?:-f|--file)[ =]([\\w./-]+\\.ya?ml)");
+
+    /**
+     * The compose file a package.json script starts (documenso keeps its development databases in
+     * docker/development/compose.yml and starts them with "npm run dx:up"), when there's none in the project folder.
+     */
+    private static Optional<String> composeFromScripts(Folder folder) {
+        return folder.read("package.json").flatMap(pkg -> {
+            Matcher m = COMPOSE_IN_SCRIPT.matcher(pkg);
+            while (m.find()) {
+                String file = m.group(1).replaceFirst("^\\./", "");
+                if (!file.startsWith("/")
+                        && !file.contains("..")
+                        && folder.read(file).isPresent()) {
+                    return Optional.of(file);
+                }
+            }
+            return Optional.empty();
+        });
+    }
+
+    /** {@code path} as written in a compose file in {@code base}, made relative to the project folder. */
+    private static String rebasePath(String path, String base) {
+        if (base.isEmpty() || path.startsWith("/") || path.startsWith("$")) {
+            return path;
+        }
+        String joined = java.nio.file.Path.of(base, path).normalize().toString();
+        return joined.isEmpty() ? "." : joined;
+    }
+
+    /** A card imported from a compose file in {@code base}: its build folder, volumes and env files moved there. */
+    private static SetupDraft.Service rebase(SetupDraft.Service card, String base) {
+        if (base.isEmpty()) {
+            return card;
+        }
+        Map<String, String> extras = new LinkedHashMap<>(card.extras());
+        for (String key : List.of("build", "native.directory")) {
+            if (extras.containsKey(key)) {
+                extras.put(key, rebasePath(extras.get(key), base));
+            }
+        }
+        if (extras.containsKey("env_files")) {
+            extras.put(
+                    "env_files",
+                    String.join(
+                            ",",
+                            Stream.of(extras.get("env_files").split(","))
+                                    .map(f -> rebasePath(f, base))
+                                    .toList()));
+        }
+        // Only bind mounts ("./data:/var/lib/x") are paths; a named volume ("pgdata:/var/lib/x") stays.
+        List<String> volumes = card.volumes().stream()
+                .map(v -> v.startsWith(".") && v.contains(":")
+                        ? rebasePath(v.substring(0, v.indexOf(':')), base) + v.substring(v.indexOf(':'))
+                        : v)
+                .toList();
+        return new SetupDraft.Service(
+                card.name(),
+                card.kind(),
+                card.command(),
+                card.isContainer()
+                        ? card.directory()
+                        : rebasePath(card.directory().isEmpty() ? "." : card.directory(), base),
+                card.image(),
+                card.ports(),
+                volumes,
+                card.environment(),
+                card.dependsOn(),
+                card.health(),
+                card.restart(),
+                card.origin(),
+                card.notes(),
+                extras);
+    }
+
     /**
      * A service's own env files that exist, or that Set up can make from an example next to them (Mastodon's
      * .env.production from .env.production.sample). One with neither is dropped, with a note saying so.
@@ -140,8 +217,10 @@ public final class FolderScan {
         List<SetupDraft.Service> services = new ArrayList<>();
         Set<String> envFiles = new LinkedHashSet<>();
 
-        Optional<String> composeFile =
-                COMPOSE_FILES.stream().filter(f -> folder.read(f).isPresent()).findFirst();
+        Optional<String> composeFile = COMPOSE_FILES.stream()
+                .filter(f -> folder.read(f).isPresent())
+                .findFirst()
+                .or(() -> composeFromScripts(folder));
         composeFile.ifPresent(file -> {
             // compose reads <name>.override.yml on top of the file by itself; so does DevDesk.
             Optional<String> overrideFile = Stream.of(".override.yml", ".override.yaml")
@@ -154,8 +233,11 @@ public final class FolderScan {
                     project,
                     folder.name(),
                     dir -> AppDetector.detectBuild(folder::read, dir));
-            services.addAll(compose.services());
-            envFiles.addAll(compose.envFiles());
+            // A compose file in a subfolder (documenso: docker/development/compose.yml) means its relative paths from
+            // there, as docker compose -f reads them; the cards are relative to the project folder.
+            String base = file.contains("/") ? file.substring(0, file.lastIndexOf('/')) : "";
+            compose.services().forEach(card -> services.add(rebase(card, base)));
+            compose.envFiles().forEach(f -> envFiles.add(rebasePath(f, base)));
             Optional<String> unreadable = compose.notes().stream()
                     .filter(n -> n.startsWith(ComposeImport.UNREADABLE))
                     .findFirst();
@@ -250,8 +332,17 @@ public final class FolderScan {
                     .sorted()
                     .forEach(dirs::add);
         }
-        for (String dir : dirs) {
-            if (covered.contains(dir)) {
+        for (int i = 0; i < dirs.size(); i++) {
+            String dir = dirs.get(i);
+            // After the last folder: a workspace whose apps live deeper than one level (documenso: apps/remix) runs
+            // them from its root ("turbo run dev"). Without any app card, its own dev script is the app.
+            if (i == dirs.size() - 1
+                    && !dir.isEmpty()
+                    && !rootImageHoldsWorkspace
+                    && AppDetector.isWorkspaceRoot(folder::read)) {
+                dirs.add("");
+            }
+            if (covered.contains(dir) || (dir.isEmpty() && services.stream().anyMatch(s -> !s.isContainer()))) {
                 continue;
             }
             AppDetector.detect(folder::read, dir, dir.isEmpty() ? folder.files() : List.of())

@@ -341,6 +341,61 @@ class FolderScanTest {
     }
 
     @Test
+    void aMonorepoWithItsComposeFileInASubfolderGetsItsDatabasesItsAppAndItsMigrateScript() {
+        // Like documenso: no compose file at the top (it's docker/development/compose.yml, started by "npm run dx:up"),
+        // apps two levels down (apps/remix) run by the root's "turbo run dev", tables made by "prisma:migrate-dev".
+        // The scan found nothing at all.
+        var folder = new FakeFolder(
+                "documenso",
+                Map.of(
+                        "package.json",
+                        """
+                        {"workspaces": ["apps/*", "packages/*"],
+                         "scripts": {"dev": "turbo run dev --filter=@documenso/remix",
+                                     "dx:up": "docker compose -f docker/development/compose.yml up -d",
+                                     "prisma:generate": "prisma generate",
+                                     "prisma:migrate-dev": "npm run with:env -- npm run prisma:migrate-dev -w @documenso/prisma"},
+                         "dependencies": {"knex-migrate": "1"}}
+                        """,
+                        "package-lock.json",
+                        "{}",
+                        "docker/development/compose.yml",
+                        """
+                        services:
+                          database:
+                            image: postgres:15
+                            ports: ["54320:5432"]
+                            volumes: ["./data:/var/lib/postgresql/data"]
+                          gotenberg:
+                            build: { context: ., dockerfile: Dockerfile.gotenberg }
+                        """,
+                        "docker/development/Dockerfile.gotenberg",
+                        "FROM gotenberg/gotenberg:8\n",
+                        "apps/remix/package.json",
+                        "{}"));
+
+        var result = FolderScan.scan(folder, "/home/me/documenso", List.of());
+        var services = result.draft().services();
+
+        assertThat(result.found())
+                .anySatisfy(f -> assertThat(f).startsWith("docker/development/compose.yml: 2 services"));
+        var db = services.stream()
+                .filter(s -> s.name().equals("database"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(db.volumes()).containsExactly("docker/development/data:/var/lib/postgresql/data");
+        var gotenberg = services.stream()
+                .filter(s -> s.name().equals("gotenberg"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(gotenberg.extras()).containsEntry("build", "docker/development");
+        assertThat(services)
+                .filteredOn(s -> !s.isContainer())
+                .extracting(SetupDraft.Service::command)
+                .containsExactlyInAnyOrder("npm run dev", "npm run prisma:migrate-dev");
+    }
+
+    @Test
     void anImageBuiltFromTheWorkspaceRootIsTheAppNoSecondCardForItsMembers() {
         // Like excalidraw: compose builds the root Dockerfile, which builds excalidraw-app into the image. The wizard
         // also made an excalidraw-app command card: the same app twice, which then failed its own install.
